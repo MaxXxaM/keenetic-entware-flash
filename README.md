@@ -174,51 +174,79 @@ The auto-start script is already saved to the USB drive during flashing. It auto
 
 Connect to Entware via SSH and run:
 
+Copy the script to auto-start:
+
 ```bash
-# Copy the script to auto-start
-cp /opt/scripts/S01swap /opt/etc/init.d/S01swap
-chmod +x /opt/etc/init.d/S01swap
-
-# Run it — the script will find the partition, initialize and activate SWAP
-/opt/etc/init.d/S01swap start
-
-# Verify
-/opt/etc/init.d/S01swap status
-free -m
-# The Swap line should show values (e.g., Swap: 1023 MB)
+cp /opt/scripts/S01swap /opt/etc/init.d/S01swap && chmod +x /opt/etc/init.d/S01swap
 ```
 
-> If the script is missing from `/opt/scripts/`, create it manually:
-> ```bash
-> cat > /opt/etc/init.d/S01swap <<'SWAP'
-> #!/bin/sh
-> find_swap() {
->     if command -v blkid >/dev/null 2>&1; then
->         OPKG=$(blkid -L OPKG 2>/dev/null)
->         [ -n "$OPKG" ] && DEV=$(echo "$OPKG" | sed 's/2$/1/') && [ -b "$DEV" ] && echo "$DEV" && return
->     fi
->     for d in /dev/sda1 /dev/sdb1 /dev/sdc1; do [ -b "$d" ] && echo "$d" && return; done
->     return 1
-> }
-> case "$1" in
->   start)
->     DEV=$(find_swap) || { echo "SWAP not found"; exit 1; }
->     swapon "$DEV" 2>/dev/null || { mkswap -L SWAP "$DEV" >/dev/null 2>&1; swapon "$DEV"; }
->     echo "SWAP started on $DEV"
->     ;;
->   stop) swapoff -a 2>/dev/null ;;
->   restart) "$0" stop; sleep 1; "$0" start ;;
->   status) cat /proc/swaps; free -m | grep -i swap ;;
->   *) echo "Usage: $0 {start|stop|restart|status}" ;;
-> esac
-> SWAP
-> chmod +x /opt/etc/init.d/S01swap
-> ```
+Run it — the script will find the partition, initialize and activate SWAP:
+
+```bash
+/opt/etc/init.d/S01swap start
+```
+
+Verify:
+
+```bash
+/opt/etc/init.d/S01swap status
+```
+
+```bash
+free -m
+```
+
+The `Swap` line should show values (e.g., `Swap: 1023 MB`).
+
+---
+
+<details>
+<summary>If the script is missing from /opt/scripts/ — create it manually</summary>
+
+Copy and paste this entire command (it creates the script file):
+
+```bash
+cat > /opt/etc/init.d/S01swap <<'SWAP'
+#!/bin/sh
+find_swap() {
+    if command -v blkid >/dev/null 2>&1; then
+        OPKG=$(blkid -L OPKG 2>/dev/null)
+        [ -n "$OPKG" ] && DEV=$(echo "$OPKG" | sed 's/2$/1/') && [ -b "$DEV" ] && echo "$DEV" && return
+    fi
+    for d in /dev/sda1 /dev/sdb1 /dev/sdc1; do [ -b "$d" ] && echo "$d" && return; done
+    return 1
+}
+case "$1" in
+  start)
+    DEV=$(find_swap) || { echo "SWAP not found"; exit 1; }
+    swapon "$DEV" 2>/dev/null || { mkswap -L SWAP "$DEV" >/dev/null 2>&1; swapon "$DEV"; }
+    echo "SWAP started on $DEV"
+    ;;
+  stop) swapoff -a 2>/dev/null ;;
+  restart) "$0" stop; sleep 1; "$0" start ;;
+  status) cat /proc/swaps; free -m | grep -i swap ;;
+  *) echo "Usage: $0 {start|stop|restart|status}" ;;
+esac
+SWAP
+```
+
+Make the script executable:
+
+```bash
+chmod +x /opt/etc/init.d/S01swap
+```
+
+</details>
+
+---
 
 After rebooting the router, SWAP will activate automatically. Verify:
 
 ```bash
 free -m
+```
+
+```bash
 cat /proc/swaps
 ```
 

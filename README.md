@@ -170,50 +170,22 @@ ssh root@192.168.1.1 -p 22
 
 Swap significantly improves stability when running multiple Entware packages. SWAP **does not activate automatically** without an init script — after each router reboot `free -m` will show `Swap: 0`.
 
-The auto-start script is already saved to the USB drive during flashing. Connect to Entware via SSH and follow these steps:
+The auto-start script is already saved to the USB drive during flashing. It auto-detects the SWAP partition (by finding the OPKG label on the adjacent partition) and runs `mkswap` + `swapon`.
 
-#### 3.1. Identify the SWAP Partition
-
-```bash
-# List all partitions
-cat /proc/partitions
-
-# Identify partition types
-blkid
-```
-
-Find the partition with `LABEL="SWAP"` — usually `/dev/sda1` or `/dev/sdc1`.
-
-#### 3.2. Initialize and Activate SWAP
+Connect to Entware via SSH and run:
 
 ```bash
-# Replace /dev/sda1 with your SWAP partition from blkid
-mkswap /dev/sda1
-swapon /dev/sda1
-```
-
-Verify:
-
-```bash
-cat /proc/swaps
-free -m
-# The Swap line should show values (e.g., Swap: 1023 MB)
-```
-
-#### 3.3. Install the Auto-Start Script
-
-The script is already on the USB drive at `/opt/scripts/S01swap`. It auto-detects the SWAP partition by label, so no manual device configuration is needed.
-
-```bash
-# Copy the script to init.d
+# Copy the script to auto-start
 cp /opt/scripts/S01swap /opt/etc/init.d/S01swap
 chmod +x /opt/etc/init.d/S01swap
 
-# Check status
-/opt/etc/init.d/S01swap status
+# Run it — the script will find the partition, initialize and activate SWAP
+/opt/etc/init.d/S01swap start
 
-# Restart to verify
-/opt/etc/init.d/S01swap restart
+# Verify
+/opt/etc/init.d/S01swap status
+free -m
+# The Swap line should show values (e.g., Swap: 1023 MB)
 ```
 
 > If the script is missing from `/opt/scripts/`, create it manually:
@@ -221,20 +193,22 @@ chmod +x /opt/etc/init.d/S01swap
 > cat > /opt/etc/init.d/S01swap <<'SWAP'
 > #!/bin/sh
 > case "$1" in
->   start) swapon $(blkid -L SWAP 2>/dev/null || echo /dev/sda1) 2>/dev/null ;;
->   stop)  swapoff -a 2>/dev/null ;;
+>   start)
+>     DEV=$(blkid -L OPKG 2>/dev/null | sed 's/2$/1/')
+>     [ -b "$DEV" ] || DEV=/dev/sda1
+>     swapon "$DEV" 2>/dev/null || { mkswap -L SWAP "$DEV" && swapon "$DEV"; }
+>     ;;
+>   stop) swapoff -a 2>/dev/null ;;
 > esac
 > SWAP
 > chmod +x /opt/etc/init.d/S01swap
 > ```
 
-#### 3.4. Verify After Reboot
+After rebooting the router, SWAP will activate automatically. Verify:
 
 ```bash
-# Reboot the router and reconnect
 free -m
 cat /proc/swaps
-# The Swap line should show values — auto-start is working
 ```
 
 ### Step 4: Verify

@@ -170,50 +170,22 @@ ssh root@192.168.1.1 -p 22
 
 启用 Swap 可以显著提高运行多个 Entware 软件包时的稳定性。如果没有 init 脚本，SWAP **不会自动激活** — 每次路由器重启后 `free -m` 将显示 `Swap: 0`。
 
-自动启动脚本已在写入 USB 时保存到闪存盘。通过 SSH 连接 Entware 并按以下步骤操作：
+自动启动脚本已在写入 USB 时保存到闪存盘。它会自动检测 SWAP 分区（通过查找相邻分区的 OPKG 卷标）并执行 `mkswap` + `swapon`。
 
-#### 3.1. 确定 SWAP 分区
-
-```bash
-# 查看所有分区
-cat /proc/partitions
-
-# 确定分区类型
-blkid
-```
-
-找到标签为 `LABEL="SWAP"` 的分区 — 通常是 `/dev/sda1` 或 `/dev/sdc1`。
-
-#### 3.2. 初始化并激活 SWAP
+通过 SSH 连接 Entware 并执行：
 
 ```bash
-# 将 /dev/sda1 替换为 blkid 中显示的 SWAP 分区
-mkswap /dev/sda1
-swapon /dev/sda1
-```
-
-验证：
-
-```bash
-cat /proc/swaps
-free -m
-# Swap 行应显示数值（例如 Swap: 1023 MB）
-```
-
-#### 3.3. 安装自动启动脚本
-
-脚本已保存在 USB 闪存盘的 `/opt/scripts/S01swap`。它会通过卷标自动检测 SWAP 分区，无需手动配置设备名称。
-
-```bash
-# 将脚本复制到 init.d
+# 将脚本复制到自动启动目录
 cp /opt/scripts/S01swap /opt/etc/init.d/S01swap
 chmod +x /opt/etc/init.d/S01swap
 
-# 检查状态
-/opt/etc/init.d/S01swap status
+# 运行 — 脚本将自动查找分区、初始化并激活 SWAP
+/opt/etc/init.d/S01swap start
 
-# 重启以验证
-/opt/etc/init.d/S01swap restart
+# 验证
+/opt/etc/init.d/S01swap status
+free -m
+# Swap 行应显示数值（例如 Swap: 1023 MB）
 ```
 
 > 如果 `/opt/scripts/` 中没有该脚本，请手动创建：
@@ -221,20 +193,22 @@ chmod +x /opt/etc/init.d/S01swap
 > cat > /opt/etc/init.d/S01swap <<'SWAP'
 > #!/bin/sh
 > case "$1" in
->   start) swapon $(blkid -L SWAP 2>/dev/null || echo /dev/sda1) 2>/dev/null ;;
->   stop)  swapoff -a 2>/dev/null ;;
+>   start)
+>     DEV=$(blkid -L OPKG 2>/dev/null | sed 's/2$/1/')
+>     [ -b "$DEV" ] || DEV=/dev/sda1
+>     swapon "$DEV" 2>/dev/null || { mkswap -L SWAP "$DEV" && swapon "$DEV"; }
+>     ;;
+>   stop) swapoff -a 2>/dev/null ;;
 > esac
 > SWAP
 > chmod +x /opt/etc/init.d/S01swap
 > ```
 
-#### 3.4. 重启后验证
+路由器重启后 SWAP 将自动激活。验证：
 
 ```bash
-# 重启路由器并重新连接
 free -m
 cat /proc/swaps
-# Swap 行应显示数值 — 表示自动启动正常工作
 ```
 
 ### 第四步：验证

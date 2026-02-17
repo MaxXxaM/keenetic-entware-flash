@@ -12,24 +12,36 @@
 
 ENABLED=yes
 
-# Auto-detect SWAP partition by label, fallback to common device names
+# Find SWAP partition: OPKG is always on partition 2, SWAP is partition 1
+# of the same disk. blkid reliably shows OPKG label but often misses swap.
 find_swap_device() {
-    # Try to find by LABEL="SWAP" using blkid
+    # Method 1: find disk with LABEL="OPKG" on partition 2, use partition 1
     if command -v blkid >/dev/null 2>&1; then
-        DEVICE=$(blkid -L SWAP 2>/dev/null)
-        if [ -n "$DEVICE" ]; then
-            echo "$DEVICE"
+        OPKG_DEV=$(blkid -L OPKG 2>/dev/null)
+        if [ -n "$OPKG_DEV" ]; then
+            # /dev/sda2 -> /dev/sda1
+            SWAP_DEV=$(echo "$OPKG_DEV" | sed 's/2$/1/')
+            if [ -b "$SWAP_DEV" ]; then
+                echo "$SWAP_DEV"
+                return 0
+            fi
+        fi
+    fi
+
+    # Method 2: try blkid SWAP label directly
+    if command -v blkid >/dev/null 2>&1; then
+        SWAP_DEV=$(blkid -L SWAP 2>/dev/null)
+        if [ -n "$SWAP_DEV" ]; then
+            echo "$SWAP_DEV"
             return 0
         fi
     fi
 
-    # Fallback: check common device names for swap type
+    # Method 3: fallback to first partition of sd devices
     for dev in /dev/sda1 /dev/sdb1 /dev/sdc1; do
         if [ -b "$dev" ]; then
-            if blkid "$dev" 2>/dev/null | grep -q 'TYPE="swap"'; then
-                echo "$dev"
-                return 0
-            fi
+            echo "$dev"
+            return 0
         fi
     done
 
@@ -48,8 +60,13 @@ start() {
         return 1
     fi
 
-    echo "Starting SWAP on $SWAP_DEVICE..."
-    swapon "$SWAP_DEVICE" 2>/dev/null || true
+    # Try swapon directly, if it fails — initialize with mkswap first
+    if ! swapon "$SWAP_DEVICE" 2>/dev/null; then
+        echo "Initializing SWAP on $SWAP_DEVICE..."
+        mkswap -L SWAP "$SWAP_DEVICE" >/dev/null 2>&1
+        swapon "$SWAP_DEVICE" 2>/dev/null || true
+    fi
+    echo "SWAP started on $SWAP_DEVICE"
 }
 
 stop() {

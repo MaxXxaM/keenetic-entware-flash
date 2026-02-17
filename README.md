@@ -1,150 +1,132 @@
 # Keenetic Entware Flash
 
-**Docker-утилита для подготовки USB-флешек под Entware на Keenetic роутерах.**
+**Подготовка USB-флешки для Entware на Keenetic роутерах — одной командой.**
 
-Docker utility for preparing USB flash drives for Entware on Keenetic routers.
-
----
-
-## Проблема / Problem
-
-Владельцы Keenetic роутеров вынуждены вручную форматировать USB-флешки (swap + ext4), скачивать правильный Entware installer — а на macOS нет нативной поддержки ext4. Эта утилита решает всё одной командой через Docker.
-
-Keenetic router owners need to manually format USB drives (swap + ext4) and download the correct Entware installer — and macOS has no native ext4 support. This utility solves everything with a single Docker command.
+Prepare a USB flash drive for Entware on Keenetic routers — with a single command.
 
 ## Quick Start
 
-### 1. Find your USB drive
-
-**macOS:**
-```bash
-diskutil list
-# Find your USB drive (e.g. /dev/disk4)
-diskutil unmountDisk /dev/disk4
-```
-
-**Linux:**
-```bash
-lsblk
-# Find your USB drive (e.g. /dev/sdb)
-sudo umount /dev/sdb*
-```
-
-### 2. Run
+Вставьте USB-флешку и выполните:
 
 ```bash
-docker run --rm -it --privileged \
-  -v /dev/disk4:/dev/target \
-  maxxxam/keenetic-entware-flash
+git clone https://github.com/MaxXxaM/keenetic-entware-flash.git
+cd keenetic-entware-flash
+sudo ./run.sh
 ```
 
-That's it! The flash drive is ready for your Keenetic router.
+Скрипт сам предложит выбрать USB-устройство:
 
-## Supported Models / Поддерживаемые модели
+```
+============================================
+ Select USB device
+============================================
 
-| Architecture | Models | Env value |
+  1) /dev/disk4 — USB DISK 2.0 (15.5 GB)
+  2) /dev/disk6 — MassStorageClass (64.9 GB)
+
+  0) Cancel
+
+Select device [1-2]:
+```
+
+Docker-образ скачается автоматически. Если pull недоступен — соберётся локально.
+
+## Requirements
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (macOS / Linux)
+
+## Supported Models
+
+| Architecture | Models | `ARCH` |
 |---|---|---|
-| **MIPSEL** | Keenetic Ultra, Giga, Viva, Extra, Air, City, Omni, Lite, Start, KN-1010, KN-1110, KN-1210, KN-1310, KN-1410, KN-1510, KN-1610, KN-1710, KN-1810, KN-1910, KN-2110, KN-2310 | `ARCH=mipsel` (default) |
-| **MIPS** | KN-2410, KN-2510, KN-2010, KN-3610 | `ARCH=mips` |
-| **AARCH64** | Keenetic Peak, Titan, Hopper, KN-2710, KN-2810, KN-2910, KN-3510 | `ARCH=aarch64` |
+| **MIPSEL** (default) | Keenetic Ultra, Giga, Viva, Extra, Air, City, Omni, Lite, Start, KN-1010–KN-2310 | `mipsel` |
+| **MIPS** | KN-2410, KN-2510, KN-2010, KN-3610 | `mips` |
+| **AARCH64** | Keenetic Peak, Titan, Hopper, KN-2710, KN-2810, KN-2910, KN-3510 | `aarch64` |
 
-## Parameters / Параметры
+## Parameters
 
 | Variable | Description | Default |
 |---|---|---|
-| `ARCH` | Entware architecture: `mipsel`, `mips`, `aarch64` | `mipsel` |
+| `ARCH` | Architecture: `mipsel`, `mips`, `aarch64` | `mipsel` |
 | `SWAP_SIZE` | Swap partition size in MB | `1024` |
-| `PARTITION_TABLE` | Partition table type: `mbr` or `gpt` | `mbr` |
-| `SKIP_ENTWARE` | Skip Entware download (`1` to skip) | `0` |
-| `FORCE` | Skip confirmation prompt (`1` to skip) | `0` |
+| `PARTITION_TABLE` | Partition table: `mbr` or `gpt` | `mbr` |
+| `SKIP_ENTWARE` | Skip Entware installer (`1` to skip) | `0` |
 
-## Examples / Примеры
-
-```bash
-# Default: MIPSEL, 1GB swap, MBR
-docker run --rm -it --privileged \
-  -v /dev/sdb:/dev/target \
-  maxxxam/keenetic-entware-flash
-
-# AArch64 (Peak, Titan, Hopper) with GPT and 512MB swap
-docker run --rm -it --privileged \
-  -e ARCH=aarch64 \
-  -e SWAP_SIZE=512 \
-  -e PARTITION_TABLE=gpt \
-  -v /dev/sdb:/dev/target \
-  maxxxam/keenetic-entware-flash
-
-# Format only (no Entware download)
-docker run --rm -it --privileged \
-  -e SKIP_ENTWARE=1 \
-  -v /dev/sdb:/dev/target \
-  maxxxam/keenetic-entware-flash
-
-# Non-interactive (CI/scripts)
-docker run --rm --privileged \
-  -e FORCE=1 \
-  -v /dev/sdb:/dev/target \
-  maxxxam/keenetic-entware-flash
-```
-
-## Building locally / Локальная сборка
+## Examples
 
 ```bash
-docker build -t keenetic-entware-flash .
-docker run --rm -it --privileged \
-  -v /dev/diskN:/dev/target \
-  keenetic-entware-flash
+# Interactive — выберите флешку из списка
+sudo ./run.sh
+
+# Указать устройство напрямую
+sudo ./run.sh /dev/disk4          # macOS
+sudo ./run.sh /dev/sdb            # Linux
+
+# AArch64 (Peak, Titan, Hopper) с GPT и 512MB swap
+sudo ARCH=aarch64 SWAP_SIZE=512 PARTITION_TABLE=gpt ./run.sh
+
+# Только разметка, без Entware
+sudo SKIP_ENTWARE=1 ./run.sh
 ```
 
-## Installing Docker / Установка Docker
-
-If you don't have Docker installed:
+## Direct Docker Usage (Linux)
 
 ```bash
-bash install-docker.sh
+docker run --rm -it --privileged \
+  -v /dev/sdb:/dev/target \
+  ghcr.io/maxxxam/keenetic-entware-flash:main
 ```
 
-The script auto-detects your OS (macOS, Linux, WSL) and installs Docker.
+## How It Works
 
-## How it works / Как это работает
+1. `run.sh` показывает список USB-устройств и предлагает выбрать
+2. Скачивает готовый Docker-образ (или собирает локально при недоступности)
+3. На macOS создаёт временный образ диска, на Linux пробрасывает устройство напрямую
+4. Контейнер создаёт MBR/GPT таблицу разделов:
+   - **Partition 1** — SWAP
+   - **Partition 2** — EXT4 (label: OPKG) с Entware installer
+5. На macOS записывает образ на флешку (пропуская пустые блоки для скорости)
+6. Готово — вставляйте флешку в роутер
 
-1. Validates that `/dev/target` is a block device
-2. Shows disk info and asks for confirmation
-3. Creates partition table (MBR or GPT)
-4. Creates swap partition (1 GB by default)
-5. Creates ext4 partition (remaining space, without `metadata_csum` for KeeneticOS compatibility)
-6. Downloads Entware installer to `/install/` on the ext4 partition
-7. Done — insert the drive into your router
+## After Flashing
+
+1. Вставьте USB в Keenetic роутер
+2. Откройте веб-интерфейс роутера → **Управление** → **Общие настройки**
+3. Установите пакет **Среда OPKG**
+4. Роутер обнаружит флешку и настроит Entware автоматически
+
+Подробнее: [help.keenetic.com](https://help.keenetic.com/hc/ru/articles/360021888880)
+
+## Local Build
+
+```bash
+# Standard build
+docker build --platform linux/amd64 -t keenetic-entware-flash .
+
+# Build in Russia (with accessible mirrors)
+docker build --platform linux/amd64 \
+  --build-arg BASE_IMAGE=cr.yandex/mirror/ubuntu:22.04 \
+  --build-arg APT_MIRROR=http://mirror.yandex.ru \
+  -t keenetic-entware-flash .
+```
 
 ## Troubleshooting
 
-### "Device /dev/target not found"
-Make sure you're passing the correct device with `-v`:
-```bash
-# macOS
-diskutil list            # find your disk
-diskutil unmountDisk /dev/diskN
-docker run ... -v /dev/diskN:/dev/target ...
+**"No external USB devices found"** — вставьте USB-флешку и попробуйте снова.
 
-# Linux
-lsblk                   # find your disk
-docker run ... -v /dev/sdX:/dev/target ...
+**"Permission denied"** — запускайте с `sudo`:
+```bash
+sudo ./run.sh
 ```
 
-### "Permission denied" or partitioning fails
-The `--privileged` flag is required for direct disk access:
-```bash
-docker run --rm -it --privileged -v /dev/sdX:/dev/target keenetic-entware-flash
-```
-
-### macOS: "Resource busy"
-Unmount the disk first:
+**macOS: "Resource busy"** — скрипт размонтирует автоматически, но если не получилось:
 ```bash
 diskutil unmountDisk /dev/diskN
 ```
 
-### Entware download fails
-If the download fails due to network issues, the drive is still properly formatted. You can manually download the installer from [bin.entware.net](https://bin.entware.net/) and place it in the `install/` directory on the ext4 partition.
+**Docker Hub / GHCR недоступен** — скрипт автоматически соберёт образ локально через доступные зеркала.
+
+**Entware installer не скачался** — флешка всё равно готова к использованию. Инсталлер зашит в Docker-образ как fallback. Если и fallback не сработал — роутер скачает Entware сам при включении OPKG.
 
 ## License
 

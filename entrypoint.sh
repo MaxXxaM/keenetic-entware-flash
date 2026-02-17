@@ -5,8 +5,11 @@ set -euo pipefail
 # Keenetic Entware Flash — USB flash drive preparation for Keenetic Entware
 # ============================================================================
 
-DEVICE="/dev/target"
+TARGET="/dev/target"
 MOUNT_POINT="/mnt/usb"
+LOOP_DEVICE=""
+CLEANUP_LOOP=0
+KPARTX_DEVICE=""
 
 # Defaults (overridable via env)
 ARCH="${ARCH:-mipsel}"
@@ -44,10 +47,20 @@ show_help() {
     cat <<'HELP'
 Keenetic Entware Flash — USB flash drive preparation for Keenetic Entware
 
-Usage:
+Usage (Linux):
   docker run --rm -it --privileged \
     -v /dev/sdX:/dev/target \
     keenetic-entware-flash
+
+Usage (macOS):
+  # 1. Create disk image from USB
+  sudo dd if=/dev/rdiskN of=/tmp/usb.img bs=1m
+  # 2. Process in container
+  docker run --rm -it --privileged \
+    -v /tmp/usb.img:/dev/target \
+    keenetic-entware-flash
+  # 3. Write image back to USB
+  sudo dd if=/tmp/usb.img of=/dev/rdiskN bs=1m
 
 Environment variables:
   ARCH              Entware architecture: mipsel (default), mips, aarch64
@@ -62,43 +75,77 @@ Model → Architecture mapping:
   AARCH64  Keenetic Peak, Titan, Hopper
 
 Examples:
-  # Default (mipsel, 1GB swap, MBR)
+  # Linux — direct block device
   docker run --rm -it --privileged -v /dev/sdb:/dev/target keenetic-entware-flash
+
+  # macOS — via disk image
+  docker run --rm -it --privileged -v /tmp/usb.img:/dev/target keenetic-entware-flash
 
   # AArch64 with GPT and 512MB swap
   docker run --rm -it --privileged \
     -e ARCH=aarch64 -e SWAP_SIZE=512 -e PARTITION_TABLE=gpt \
-    -v /dev/sdb:/dev/target keenatic-flash
-
-  # Skip Entware download (format only)
-  docker run --rm -it --privileged \
-    -e SKIP_ENTWARE=1 \
-    -v /dev/sdb:/dev/target keenatic-flash
+    -v /dev/sdb:/dev/target keenetic-entware-flash
 HELP
     exit 0
 }
 
 # ============================================================================
-# Safety checks
+# Cleanup on exit
 # ============================================================================
-check_device() {
-    if [ ! -e "$DEVICE" ]; then
-        echo "ERROR: Device $DEVICE not found."
+cleanup() {
+    umount "$MOUNT_POINT" 2>/dev/null || true
+    if [ -n "$KPARTX_DEVICE" ]; then
+        kpartx -dv "$KPARTX_DEVICE" 2>/dev/null || true
+    fi
+    if [ "$CLEANUP_LOOP" = "1" ] && [ -n "$LOOP_DEVICE" ]; then
+        losetup -d "$LOOP_DEVICE" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
+# ============================================================================
+# Device setup
+# ============================================================================
+setup_device() {
+    if [ ! -e "$TARGET" ]; then
+        echo "ERROR: $TARGET not found."
         echo ""
         echo "Mount your USB device into the container:"
-        echo "  docker run --rm -it --privileged -v /dev/sdX:/dev/target keenetic-entware-flash"
         echo ""
-        echo "On macOS:  diskutil list → find your disk → /dev/diskN"
-        echo "On Linux:  lsblk → find your disk → /dev/sdX"
+        echo "  Linux:  docker run --rm -it --privileged -v /dev/sdX:/dev/target keenetic-entware-flash"
+        echo ""
+        echo "  macOS:  1) sudo dd if=/dev/rdiskN of=/tmp/usb.img bs=1m"
+        echo "          2) docker run --rm -it --privileged -v /tmp/usb.img:/dev/target keenetic-entware-flash"
+        echo "          3) sudo dd if=/tmp/usb.img of=/dev/rdiskN bs=1m"
         exit 1
     fi
 
-    if [ ! -b "$DEVICE" ]; then
-        echo "ERROR: $DEVICE is not a block device."
+    if [ -b "$TARGET" ]; then
+        # Linux: direct block device
+        DEVICE="$TARGET"
+        echo "Mode: direct block device"
+    elif [ -f "$TARGET" ]; then
+        # macOS: disk image file → attach via losetup
+        echo "Mode: disk image file (macOS)"
+        LOOP_DEVICE=$(losetup --find --show --partscan "$TARGET")
+        CLEANUP_LOOP=1
+        DEVICE="$LOOP_DEVICE"
+        echo "Loop device: $LOOP_DEVICE"
+    else
+        echo "ERROR: $TARGET is neither a block device nor a regular file."
+        echo ""
+        echo "On macOS, Docker cannot pass block devices directly."
+        echo "Use a disk image instead:"
+        echo "  1) sudo dd if=/dev/rdiskN of=/tmp/usb.img bs=1m"
+        echo "  2) docker run --rm -it --privileged -v /tmp/usb.img:/dev/target keenetic-entware-flash"
+        echo "  3) sudo dd if=/tmp/usb.img of=/dev/rdiskN bs=1m"
         exit 1
     fi
 }
 
+# ============================================================================
+# Display info
+# ============================================================================
 show_disk_info() {
     echo "============================================"
     echo " Keenetic Entware Flash — USB Preparation Tool"
@@ -132,7 +179,7 @@ confirm() {
         return 0
     fi
 
-    echo "WARNING: ALL DATA ON $DEVICE WILL BE DESTROYED!"
+    echo "WARNING: ALL DATA WILL BE DESTROYED!"
     echo ""
     read -r -p "Continue? [y/N]: " answer
     case "$answer" in
@@ -167,29 +214,40 @@ partition_disk() {
     parted -s "$DEVICE" mkpart primary ext4 "${SWAP_SIZE}MiB" 100%
 
     # Wait for partition devices to appear
-    sleep 2
+    sleep 1
     partprobe "$DEVICE" 2>/dev/null || true
     sleep 1
 
     # Determine partition device names
     local part1 part2
-    if [ -e "${DEVICE}1" ]; then
-        part1="${DEVICE}1"
-        part2="${DEVICE}2"
-    elif [ -e "${DEVICE}p1" ]; then
+    if [ -e "${DEVICE}p1" ]; then
         part1="${DEVICE}p1"
         part2="${DEVICE}p2"
+    elif [ -e "${DEVICE}1" ]; then
+        part1="${DEVICE}1"
+        part2="${DEVICE}2"
     else
-        echo "ERROR: Partition devices not found after partitioning."
-        echo "Tried: ${DEVICE}1, ${DEVICE}p1"
-        exit 1
+        # In Docker, partition nodes may not appear automatically — use kpartx
+        echo ">>> Partition nodes not found, using kpartx..."
+        kpartx -av "$DEVICE"
+        sleep 1
+        local loop_name
+        loop_name=$(basename "$DEVICE")
+        part1="/dev/mapper/${loop_name}p1"
+        part2="/dev/mapper/${loop_name}p2"
+        KPARTX_DEVICE="$DEVICE"
+        if [ ! -e "$part1" ]; then
+            echo "ERROR: Partition devices not found after kpartx."
+            echo "Tried: $part1, $part2"
+            exit 1
+        fi
     fi
 
     echo ">>> Formatting swap ($part1)..."
-    mkswap "$part1"
+    mkswap -L SWAP "$part1"
 
     echo ">>> Formatting ext4 ($part2)..."
-    mkfs.ext4 -O ^metadata_csum -F "$part2"
+    mkfs.ext4 -O ^metadata_csum -L OPKG -F "$part2"
 
     echo ">>> Partitioning complete."
     echo ""
@@ -207,20 +265,21 @@ install_entware() {
     fi
 
     local part2
-    if [ -e "${DEVICE}2" ]; then
-        part2="${DEVICE}2"
-    elif [ -e "${DEVICE}p2" ]; then
+    local loop_name
+    loop_name=$(basename "$DEVICE")
+    if [ -e "${DEVICE}p2" ]; then
         part2="${DEVICE}p2"
+    elif [ -e "${DEVICE}2" ]; then
+        part2="${DEVICE}2"
+    elif [ -e "/dev/mapper/${loop_name}p2" ]; then
+        part2="/dev/mapper/${loop_name}p2"
     else
         echo "ERROR: ext4 partition not found."
         exit 1
     fi
 
-    local arch_path
-    arch_path=$(arch_to_path "$ARCH")
-    local filename="EN_${arch_path}-installer.tar.gz"
+    local filename="${ARCH}-installer.tar.gz"
 
-    # Use the correct URL path based on architecture
     local url_arch_dir
     case "$ARCH" in
         mipsel)  url_arch_dir="mipselsf-k3.4" ;;
@@ -229,6 +288,7 @@ install_entware() {
     esac
 
     local url="https://bin.entware.net/${url_arch_dir}/installer/${filename}"
+    local fallback="/opt/entware-installers/${filename}"
 
     echo ""
     echo ">>> Mounting ext4 partition..."
@@ -241,13 +301,22 @@ install_entware() {
     echo ">>> Downloading Entware installer..."
     echo "    URL: $url"
 
-    if wget -q --show-progress -O "${MOUNT_POINT}/install/${filename}" "$url"; then
+    if wget -q --show-progress -O "${MOUNT_POINT}/install/${filename}" "$url" 2>&1 && \
+       [ -s "${MOUNT_POINT}/install/${filename}" ]; then
         echo ">>> Entware installer downloaded successfully."
     else
-        echo "WARNING: Failed to download Entware installer."
-        echo "URL: $url"
-        echo ""
-        echo "You can download it manually later and place it in the /install/ directory."
+        rm -f "${MOUNT_POINT}/install/${filename}"
+        if [ -s "$fallback" ]; then
+            echo ">>> Download failed, using built-in fallback..."
+            cp "$fallback" "${MOUNT_POINT}/install/${filename}"
+            echo ">>> Entware installer copied from fallback."
+        else
+            echo "WARNING: Failed to download Entware installer and no fallback available."
+            echo "URL: $url"
+            echo ""
+            echo "You can download it manually later and place it in the /install/ directory."
+            echo "Or enable OPKG in router settings — the router will install Entware itself."
+        fi
     fi
 
     echo ">>> Unmounting..."
@@ -260,36 +329,28 @@ install_entware() {
 show_success() {
     echo ""
     echo "============================================"
-    echo " SUCCESS! USB flash drive is ready."
+    echo " SUCCESS! Image is ready."
     echo "============================================"
     echo ""
-    echo "Next steps:"
-    echo "  1. Safely eject the USB drive from your computer"
-    echo "  2. Insert the USB drive into the Keenetic router"
-    echo "  3. Go to router settings → System → USB Storage"
-    echo "  4. The router will detect the drive and install Entware"
-    echo ""
     echo "Partition layout:"
-    echo "  Partition 1: swap (${SWAP_SIZE} MB)"
-    echo "  Partition 2: ext4 (data + Entware)"
+    echo "  Partition 1: SWAP (${SWAP_SIZE} MB)"
+    echo "  Partition 2: OPKG ext4 (data + Entware)"
     echo ""
     if [ "$SKIP_ENTWARE" != "1" ]; then
         echo "Entware architecture: $ARCH ($(arch_to_path "$ARCH"))"
         echo ""
     fi
-    echo "For more info: https://help.keenetic.com/hc/ru/articles/360021888880"
 }
 
 # ============================================================================
 # Main
 # ============================================================================
 main() {
-    # Handle --help
     if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
         show_help
     fi
 
-    check_device
+    setup_device
     show_disk_info
     confirm
     partition_disk

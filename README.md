@@ -35,7 +35,7 @@ sudo umount /dev/sdb*
 ```bash
 docker run --rm -it --privileged \
   -v /dev/disk4:/dev/target \
-  ghcr.io/maxxxam/keenetic-entware-flash
+  maxxxam/keenetic-entware-flash
 ```
 
 That's it! The flash drive is ready for your Keenetic router.
@@ -64,7 +64,7 @@ That's it! The flash drive is ready for your Keenetic router.
 # Default: MIPSEL, 1GB swap, MBR
 docker run --rm -it --privileged \
   -v /dev/sdb:/dev/target \
-  ghcr.io/maxxxam/keenetic-entware-flash
+  maxxxam/keenetic-entware-flash
 
 # AArch64 (Peak, Titan, Hopper) with GPT and 512MB swap
 docker run --rm -it --privileged \
@@ -72,19 +72,19 @@ docker run --rm -it --privileged \
   -e SWAP_SIZE=512 \
   -e PARTITION_TABLE=gpt \
   -v /dev/sdb:/dev/target \
-  ghcr.io/maxxxam/keenetic-entware-flash
+  maxxxam/keenetic-entware-flash
 
 # Format only (no Entware download)
 docker run --rm -it --privileged \
   -e SKIP_ENTWARE=1 \
   -v /dev/sdb:/dev/target \
-  ghcr.io/maxxxam/keenetic-entware-flash
+  maxxxam/keenetic-entware-flash
 
 # Non-interactive (CI/scripts)
 docker run --rm --privileged \
   -e FORCE=1 \
   -v /dev/sdb:/dev/target \
-  ghcr.io/maxxxam/keenetic-entware-flash
+  maxxxam/keenetic-entware-flash
 ```
 
 ## Building locally / Локальная сборка
@@ -134,7 +134,7 @@ docker run ... -v /dev/sdX:/dev/target ...
 ### "Permission denied" or partitioning fails
 The `--privileged` flag is required for direct disk access:
 ```bash
-docker run --rm -it --privileged -v /dev/sdX:/dev/target keenatic-flash
+docker run --rm -it --privileged -v /dev/sdX:/dev/target keenetic-entware-flash
 ```
 
 ### macOS: "Resource busy"

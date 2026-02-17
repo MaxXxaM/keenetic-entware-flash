@@ -90,10 +90,65 @@ docker run --rm -it --privileged \
 
 ## After Flashing
 
-1. Insert the USB drive into your Keenetic router
-2. Open the router web UI → **Management** → **General Settings**
-3. Install the **OPKG package manager**
-4. The router will detect the drive and set up Entware automatically
+### Step 1: Install OPKG
+
+1. Insert the USB drive into the Keenetic router
+2. Open the router web UI (usually http://192.168.1.1)
+3. Go to **Management** → **General Settings** → **Updates and Component Options**
+4. Find and install **OPKG Package Manager**:
+   > Allows installing OpenWRT packages to extend the router's functionality.
+   > Community support is available at [forum.keenetic.ru](https://forum.keenetic.ru). Keenetic technical support does not cover these topics.
+5. The router will reboot, detect the USB drive, and install Entware automatically
+
+### Step 2: Enable SWAP
+
+After Entware is installed, connect to the router via SSH to enable SWAP:
+
+```bash
+ssh admin@192.168.1.1
+```
+
+Then run the following commands:
+
+```bash
+# Check if the swap partition is detected
+fdisk -l /dev/sda
+
+# Enable swap
+swapon /dev/sda1
+
+# Verify swap is active
+free
+```
+
+To make swap persistent across reboots, add it to the startup script:
+
+```bash
+# Create or edit the startup script
+cat >> /opt/etc/init.d/S01swap <<'SWAP'
+#!/bin/sh
+case "$1" in
+  start)
+    swapon /dev/sda1
+    ;;
+  stop)
+    swapoff /dev/sda1
+    ;;
+esac
+SWAP
+chmod +x /opt/etc/init.d/S01swap
+```
+
+### Step 3: Verify
+
+```bash
+# Check Entware is working
+opkg update
+opkg list-installed
+
+# Check swap is active
+free
+```
 
 More info: [help.keenetic.com](https://help.keenetic.com/hc/en/articles/360021888880)
 

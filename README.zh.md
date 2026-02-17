@@ -90,10 +90,65 @@ docker run --rm -it --privileged \
 
 ## 写入后的操作
 
+### 第一步：安装 OPKG
+
 1. 将 USB 闪存盘插入 Keenetic 路由器
-2. 打开路由器管理界面 → **管理** → **常规设置**
-3. 安装 **OPKG 软件包管理器**
-4. 路由器会自动检测闪存盘并配置 Entware
+2. 打开路由器管理界面（通常为 http://192.168.1.1）
+3. 进入 **管理** → **常规设置** → **更新和组件选项**
+4. 找到并安装 **OPKG 软件包管理器**：
+   > 允许安装 OpenWRT 软件包以扩展路由器功能。
+   > 社区支持可在 [forum.keenetic.ru](https://forum.keenetic.ru) 获得。Keenetic 官方技术支持不涵盖此类问题。
+5. 路由器将重启，自动检测 USB 闪存盘并安装 Entware
+
+### 第二步：启用 SWAP
+
+Entware 安装完成后，通过 SSH 连接路由器以启用 SWAP：
+
+```bash
+ssh admin@192.168.1.1
+```
+
+执行以下命令：
+
+```bash
+# 检查是否检测到 swap 分区
+fdisk -l /dev/sda
+
+# 启用 swap
+swapon /dev/sda1
+
+# 验证 swap 是否已激活
+free
+```
+
+要使 swap 在重启后自动启用，创建启动脚本：
+
+```bash
+# 创建启动脚本
+cat >> /opt/etc/init.d/S01swap <<'SWAP'
+#!/bin/sh
+case "$1" in
+  start)
+    swapon /dev/sda1
+    ;;
+  stop)
+    swapoff /dev/sda1
+    ;;
+esac
+SWAP
+chmod +x /opt/etc/init.d/S01swap
+```
+
+### 第三步：验证
+
+```bash
+# 检查 Entware 是否正常工作
+opkg update
+opkg list-installed
+
+# 检查 swap 是否已激活
+free
+```
 
 更多信息：[help.keenetic.com](https://help.keenetic.com/hc/en/articles/360021888880)
 

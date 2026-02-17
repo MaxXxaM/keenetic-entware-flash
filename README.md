@@ -77,6 +77,60 @@ docker run --rm -it --privileged \
   ghcr.io/maxxxam/keenetic-entware-flash:main
 ```
 
+## macOS: Manual Preparation (without Docker)
+
+If you prefer not to install Docker, you can prepare the USB drive directly on macOS.
+
+### Prerequisites
+
+```bash
+brew install e2fsprogs
+```
+
+### Steps
+
+1. Insert a USB flash drive and find its disk identifier:
+
+```bash
+diskutil list external physical
+```
+
+Look for your drive (e.g., `/dev/disk4`). **Double-check the disk number** — selecting the wrong disk will destroy data.
+
+2. Create an MBR partition table with two partitions (replace `disk4` with your disk):
+
+```bash
+sudo diskutil partitionDisk /dev/disk4 MBRFormat \
+  "MS-DOS FAT32" "SWAP" 1024M \
+  "MS-DOS FAT32" "OPKG" R
+```
+
+This creates:
+- **Partition 1** — 1 GB for SWAP
+- **Partition 2** — remaining space for Entware data
+
+3. Reformat partition 2 as ext4:
+
+```bash
+diskutil unmountDisk /dev/disk4
+sudo $(brew --prefix e2fsprogs)/sbin/mkfs.ext4 -O ^metadata_csum -L OPKG -F /dev/disk4s2
+```
+
+4. Eject the drive:
+
+```bash
+diskutil eject /dev/disk4
+```
+
+5. Insert the USB drive into your Keenetic router and follow the [After Flashing](#after-flashing) steps.
+
+> **Note:** The SWAP partition will be initialized automatically by the router's init script (`mkswap` + `swapon`). The router will download Entware when the OPKG component is enabled — an internet connection is required.
+
+### Customization
+
+- **Swap size**: change `1024M` to your preferred size (e.g., `512M`, `2048M`)
+- **GPT instead of MBR**: replace `MBRFormat` with `GPTFormat`
+
 ## How It Works
 
 1. `run.sh` lists USB devices and prompts you to select one

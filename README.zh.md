@@ -77,6 +77,60 @@ docker run --rm -it --privileged \
   ghcr.io/maxxxam/keenetic-entware-flash:main
 ```
 
+## macOS：手动准备（无需 Docker）
+
+如果您不想安装 Docker，可以直接在 macOS 上准备 USB 闪存盘。
+
+### 前提条件
+
+```bash
+brew install e2fsprogs
+```
+
+### 步骤
+
+1. 插入 USB 闪存盘并查找其磁盘标识符：
+
+```bash
+diskutil list external physical
+```
+
+找到您的闪存盘（例如 `/dev/disk4`）。**请仔细核对磁盘编号** — 选错磁盘将会导致数据丢失。
+
+2. 创建包含两个分区的 MBR 分区表（将 `disk4` 替换为您的磁盘）：
+
+```bash
+sudo diskutil partitionDisk /dev/disk4 MBRFormat \
+  "MS-DOS FAT32" "SWAP" 1024M \
+  "MS-DOS FAT32" "OPKG" R
+```
+
+这将创建：
+- **分区 1** — 1 GB 用于 SWAP
+- **分区 2** — 剩余空间用于 Entware 数据
+
+3. 将分区 2 重新格式化为 ext4：
+
+```bash
+diskutil unmountDisk /dev/disk4
+sudo $(brew --prefix e2fsprogs)/sbin/mkfs.ext4 -O ^metadata_csum -L OPKG -F /dev/disk4s2
+```
+
+4. 弹出闪存盘：
+
+```bash
+diskutil eject /dev/disk4
+```
+
+5. 将 USB 闪存盘插入 Keenetic 路由器，然后按照[写入后的操作](#写入后的操作)部分的步骤操作。
+
+> **注意：** SWAP 分区将由路由器的 init 脚本自动初始化（`mkswap` + `swapon`）。路由器会在启用 OPKG 组件时自动下载 Entware — 需要互联网连接。
+
+### 自定义选项
+
+- **Swap 大小**：将 `1024M` 更改为所需大小（例如 `512M`、`2048M`）
+- **使用 GPT 替代 MBR**：将 `MBRFormat` 替换为 `GPTFormat`
+
 ## 工作原理
 
 1. `run.sh` 列出 USB 设备并提示选择

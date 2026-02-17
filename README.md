@@ -120,7 +120,19 @@ Connect and change the default password immediately:
 
 ```bash
 ssh root@192.168.1.1 -p 222
-passwd
+
+passwd root
+# Changing password for root
+# New password:
+# Retype password:
+# passwd: password for root changed by root
+```
+
+Update the package list and installed packages:
+
+```bash
+opkg update
+opkg upgrade
 ```
 
 #### Configure SSH Ports
@@ -159,9 +171,6 @@ ssh root@192.168.1.1 -p 22
 Swap significantly improves stability when running multiple Entware packages. Connect to Entware via SSH and run:
 
 ```bash
-# Check if the swap partition is detected
-fdisk -l /dev/sda
-
 # Enable swap
 swapon /dev/sda1
 

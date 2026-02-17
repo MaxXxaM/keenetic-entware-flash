@@ -120,7 +120,19 @@ docker run --rm -it --privileged \
 
 ```bash
 ssh root@192.168.1.1 -p 222
-passwd
+
+passwd root
+# Changing password for root
+# New password:
+# Retype password:
+# passwd: password for root changed by root
+```
+
+更新软件包列表并升级已安装的软件包：
+
+```bash
+opkg update
+opkg upgrade
 ```
 
 #### 配置 SSH 端口
@@ -159,9 +171,6 @@ ssh root@192.168.1.1 -p 22
 启用 Swap 可以显著提高运行多个 Entware 软件包时的稳定性。通过 SSH 连接 Entware 并执行：
 
 ```bash
-# 检查是否检测到 swap 分区
-fdisk -l /dev/sda
-
 # 启用 swap
 swapon /dev/sda1
 

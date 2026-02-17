@@ -120,7 +120,19 @@ docker run --rm -it --privileged \
 
 ```bash
 ssh root@192.168.1.1 -p 222
-passwd
+
+passwd root
+# Changing password for root
+# New password:
+# Retype password:
+# passwd: password for root changed by root
+```
+
+Обновите список пакетов и установленные пакеты:
+
+```bash
+opkg update
+opkg upgrade
 ```
 
 #### Настройка SSH-портов
@@ -159,9 +171,6 @@ ssh root@192.168.1.1 -p 22
 Swap значительно повышает стабильность при работе нескольких пакетов Entware. Подключитесь к Entware по SSH и выполните:
 
 ```bash
-# Проверить, что swap-раздел обнаружен
-fdisk -l /dev/sda
-
 # Включить swap
 swapon /dev/sda1
 

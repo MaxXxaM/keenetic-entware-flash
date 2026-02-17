@@ -1,0 +1,133 @@
+# Keenetic Entware Flash
+
+**Подготовка USB-флешки для Entware на Keenetic роутерах — одной командой.**
+
+[English](README.md) | [中文](README.zh.md)
+
+## Быстрый старт
+
+Вставьте USB-флешку и выполните:
+
+```bash
+git clone https://github.com/MaxXxaM/keenetic-entware-flash.git
+cd keenetic-entware-flash
+sudo ./run.sh
+```
+
+Скрипт покажет доступные USB-устройства:
+
+```
+============================================
+ Select USB device
+============================================
+
+  1) /dev/disk4 — USB DISK 2.0 (15.5 GB)
+  2) /dev/disk6 — MassStorageClass (64.9 GB)
+
+  0) Cancel
+
+Select device [1-2]:
+```
+
+Docker-образ скачивается автоматически. Если реестр недоступен — собирается локально.
+
+## Требования
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (macOS / Linux)
+
+## Поддерживаемые модели
+
+| Архитектура | Модели | `ARCH` |
+|---|---|---|
+| **MIPSEL** (по умолчанию) | Keenetic Ultra, Giga, Viva, Extra, Air, City, Omni, Lite, Start, KN-1010–KN-2310 | `mipsel` |
+| **MIPS** | KN-2410, KN-2510, KN-2010, KN-3610 | `mips` |
+| **AARCH64** | Keenetic Peak, Titan, Hopper, KN-2710, KN-2810, KN-2910, KN-3510 | `aarch64` |
+
+## Параметры
+
+| Переменная | Описание | По умолчанию |
+|---|---|---|
+| `ARCH` | Архитектура: `mipsel`, `mips`, `aarch64` | `mipsel` |
+| `SWAP_SIZE` | Размер swap-раздела в МБ | `1024` |
+| `PARTITION_TABLE` | Таблица разделов: `mbr` или `gpt` | `mbr` |
+| `SKIP_ENTWARE` | Пропустить установщик Entware (`1` — пропустить) | `0` |
+
+## Примеры
+
+```bash
+# Интерактивный выбор флешки
+sudo ./run.sh
+
+# Указать устройство напрямую
+sudo ./run.sh /dev/disk4          # macOS
+sudo ./run.sh /dev/sdb            # Linux
+
+# AArch64 (Peak, Titan, Hopper) с GPT и 512MB swap
+sudo ARCH=aarch64 SWAP_SIZE=512 PARTITION_TABLE=gpt ./run.sh
+
+# Только разметка, без Entware
+sudo SKIP_ENTWARE=1 ./run.sh
+```
+
+## Прямой запуск через Docker (Linux)
+
+```bash
+docker run --rm -it --privileged \
+  -v /dev/sdb:/dev/target \
+  ghcr.io/maxxxam/keenetic-entware-flash:main
+```
+
+## Как это работает
+
+1. `run.sh` показывает список USB-устройств и предлагает выбрать
+2. Скачивает готовый Docker-образ (или собирает локально при недоступности)
+3. На macOS создаёт временный образ диска, на Linux пробрасывает устройство напрямую
+4. Контейнер создаёт таблицу разделов MBR/GPT:
+   - **Раздел 1** — SWAP
+   - **Раздел 2** — EXT4 (метка: OPKG) с установщиком Entware
+5. На macOS записывает образ на флешку (пропуская пустые блоки для скорости)
+6. Готово — вставляйте флешку в роутер
+
+## После записи
+
+1. Вставьте USB-флешку в Keenetic роутер
+2. Откройте веб-интерфейс роутера → **Управление** → **Общие настройки**
+3. Установите пакет **Среда OPKG**
+4. Роутер обнаружит флешку и настроит Entware автоматически
+
+Подробнее: [help.keenetic.com](https://help.keenetic.com/hc/ru/articles/360021888880)
+
+## Локальная сборка
+
+```bash
+# Стандартная сборка
+docker build --platform linux/amd64 -t keenetic-entware-flash .
+
+# Сборка в России (с доступными зеркалами)
+docker build --platform linux/amd64 \
+  --build-arg BASE_IMAGE=cr.yandex/mirror/ubuntu:22.04 \
+  --build-arg APT_MIRROR=http://mirror.yandex.ru \
+  -t keenetic-entware-flash .
+```
+
+## Решение проблем
+
+**"No external USB devices found"** — вставьте USB-флешку и попробуйте снова.
+
+**"Permission denied"** — запускайте с `sudo`:
+```bash
+sudo ./run.sh
+```
+
+**macOS: "Resource busy"** — скрипт размонтирует диск автоматически, но если не получилось:
+```bash
+diskutil unmountDisk /dev/diskN
+```
+
+**Docker Hub / GHCR недоступен** — скрипт автоматически соберёт образ локально через доступные зеркала.
+
+**Установщик Entware не скачался** — флешка всё равно готова. Установщик зашит в Docker-образ как fallback. Если и он не сработал — роутер скачает Entware сам при включении OPKG.
+
+## Лицензия
+
+MIT — см. [LICENSE](LICENSE).

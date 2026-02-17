@@ -1,12 +1,12 @@
 # Keenetic Entware Flash
 
-**Подготовка USB-флешки для Entware на Keenetic роутерах — одной командой.**
+**Prepare a USB flash drive for Entware on Keenetic routers — with a single command.**
 
-Prepare a USB flash drive for Entware on Keenetic routers — with a single command.
+[Русский](README.ru.md) | [中文](README.zh.md)
 
 ## Quick Start
 
-Вставьте USB-флешку и выполните:
+Insert a USB flash drive and run:
 
 ```bash
 git clone https://github.com/MaxXxaM/keenetic-entware-flash.git
@@ -14,7 +14,7 @@ cd keenetic-entware-flash
 sudo ./run.sh
 ```
 
-Скрипт сам предложит выбрать USB-устройство:
+The script will show available USB devices:
 
 ```
 ============================================
@@ -29,7 +29,7 @@ sudo ./run.sh
 Select device [1-2]:
 ```
 
-Docker-образ скачается автоматически. Если pull недоступен — соберётся локально.
+The Docker image is pulled automatically. If the registry is unavailable, it builds locally.
 
 ## Requirements
 
@@ -55,17 +55,17 @@ Docker-образ скачается автоматически. Если pull �
 ## Examples
 
 ```bash
-# Interactive — выберите флешку из списка
+# Interactive — pick your USB from a list
 sudo ./run.sh
 
-# Указать устройство напрямую
+# Specify device directly
 sudo ./run.sh /dev/disk4          # macOS
 sudo ./run.sh /dev/sdb            # Linux
 
-# AArch64 (Peak, Titan, Hopper) с GPT и 512MB swap
+# AArch64 (Peak, Titan, Hopper) with GPT and 512MB swap
 sudo ARCH=aarch64 SWAP_SIZE=512 PARTITION_TABLE=gpt ./run.sh
 
-# Только разметка, без Entware
+# Partition only, no Entware
 sudo SKIP_ENTWARE=1 ./run.sh
 ```
 
@@ -79,23 +79,23 @@ docker run --rm -it --privileged \
 
 ## How It Works
 
-1. `run.sh` показывает список USB-устройств и предлагает выбрать
-2. Скачивает готовый Docker-образ (или собирает локально при недоступности)
-3. На macOS создаёт временный образ диска, на Linux пробрасывает устройство напрямую
-4. Контейнер создаёт MBR/GPT таблицу разделов:
+1. `run.sh` lists USB devices and prompts you to select one
+2. Pulls the pre-built Docker image (or builds locally if unavailable)
+3. On macOS — creates a temporary disk image; on Linux — passes the device directly
+4. The container creates an MBR/GPT partition table:
    - **Partition 1** — SWAP
-   - **Partition 2** — EXT4 (label: OPKG) с Entware installer
-5. На macOS записывает образ на флешку (пропуская пустые блоки для скорости)
-6. Готово — вставляйте флешку в роутер
+   - **Partition 2** — EXT4 (label: OPKG) with Entware installer
+5. On macOS — writes the image to USB (skipping empty blocks for speed)
+6. Done — insert the drive into your router
 
 ## After Flashing
 
-1. Вставьте USB в Keenetic роутер
-2. Откройте веб-интерфейс роутера → **Управление** → **Общие настройки**
-3. Установите пакет **Среда OPKG**
-4. Роутер обнаружит флешку и настроит Entware автоматически
+1. Insert the USB drive into your Keenetic router
+2. Open the router web UI → **Management** → **General Settings**
+3. Install the **OPKG package manager**
+4. The router will detect the drive and set up Entware automatically
 
-Подробнее: [help.keenetic.com](https://help.keenetic.com/hc/ru/articles/360021888880)
+More info: [help.keenetic.com](https://help.keenetic.com/hc/en/articles/360021888880)
 
 ## Local Build
 
@@ -112,21 +112,21 @@ docker build --platform linux/amd64 \
 
 ## Troubleshooting
 
-**"No external USB devices found"** — вставьте USB-флешку и попробуйте снова.
+**"No external USB devices found"** — insert a USB flash drive and try again.
 
-**"Permission denied"** — запускайте с `sudo`:
+**"Permission denied"** — run with `sudo`:
 ```bash
 sudo ./run.sh
 ```
 
-**macOS: "Resource busy"** — скрипт размонтирует автоматически, но если не получилось:
+**macOS: "Resource busy"** — the script unmounts automatically, but if it fails:
 ```bash
 diskutil unmountDisk /dev/diskN
 ```
 
-**Docker Hub / GHCR недоступен** — скрипт автоматически соберёт образ локально через доступные зеркала.
+**Docker Hub / GHCR unavailable** — the script will automatically build the image locally using accessible mirrors.
 
-**Entware installer не скачался** — флешка всё равно готова к использованию. Инсталлер зашит в Docker-образ как fallback. Если и fallback не сработал — роутер скачает Entware сам при включении OPKG.
+**Entware installer failed to download** — the drive is still ready. The installer is embedded in the Docker image as a fallback. If that also fails, the router will download Entware itself when OPKG is enabled.
 
 ## License
 

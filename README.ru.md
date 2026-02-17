@@ -330,6 +330,45 @@ docker build --platform linux/amd64 \
   -t keenetic-entware-flash .
 ```
 
+## Клонирование USB (Backup / Restore)
+
+Флешки в роутерах работают 24/7 и могут выходить из строя. Используйте `clone.sh` для создания полного побайтового слепка флешки и восстановления на новый накопитель — без Docker.
+
+### Backup (USB → файл)
+
+```bash
+# Интерактивный выбор флешки
+sudo ./clone.sh backup
+
+# Указать устройство напрямую
+sudo ./clone.sh backup /dev/disk4          # macOS
+sudo ./clone.sh backup /dev/sdb            # Linux
+
+# Указать путь к файлу
+sudo ./clone.sh backup /dev/disk4 ~/backup.img
+
+# Сжатый backup (gzip)
+sudo ./clone.sh backup --compress
+sudo ./clone.sh backup /dev/disk4 --compress
+```
+
+По умолчанию сохраняет в `~/keenetic-backup-YYYY-MM-DD.img`
+
+### Restore (файл → USB)
+
+```bash
+# Интерактивный выбор флешки
+sudo ./clone.sh restore backup.img
+
+# Указать устройство напрямую
+sudo ./clone.sh restore backup.img /dev/disk4
+```
+
+- Сжатые образы (`.img.gz`) определяются автоматически
+- При восстановлении пустые блоки пропускаются — запись быстрее на 60-80%
+- Скрипт проверяет, что образ помещается на целевой диск
+- Перед записью требуется подтверждение
+
 ## Решение проблем
 
 **"No external USB devices found"** — вставьте USB-флешку и попробуйте снова.

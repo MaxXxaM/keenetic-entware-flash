@@ -330,6 +330,45 @@ docker build --platform linux/amd64 \
   -t keenetic-entware-flash .
 ```
 
+## USB Clone (Backup / Restore)
+
+USB drives in routers run 24/7 and can wear out. Use `clone.sh` to create a full byte-for-byte backup of your USB drive and restore it to a new one — no Docker required.
+
+### Backup (USB → file)
+
+```bash
+# Interactive USB selection
+sudo ./clone.sh backup
+
+# Specify device directly
+sudo ./clone.sh backup /dev/disk4          # macOS
+sudo ./clone.sh backup /dev/sdb            # Linux
+
+# Custom output path
+sudo ./clone.sh backup /dev/disk4 ~/backup.img
+
+# Compressed backup (gzip)
+sudo ./clone.sh backup --compress
+sudo ./clone.sh backup /dev/disk4 --compress
+```
+
+Default output: `~/keenetic-backup-YYYY-MM-DD.img`
+
+### Restore (file → USB)
+
+```bash
+# Interactive USB selection
+sudo ./clone.sh restore backup.img
+
+# Specify device directly
+sudo ./clone.sh restore backup.img /dev/disk4
+```
+
+- Compressed images (`.img.gz`) are detected automatically
+- Empty blocks are skipped during restore for 60-80% faster writes
+- The script checks that the image fits on the target disk
+- Confirmation is required before writing
+
 ## Troubleshooting
 
 **"No external USB devices found"** — insert a USB flash drive and try again.

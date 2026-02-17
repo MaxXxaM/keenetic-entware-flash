@@ -98,17 +98,65 @@ docker run --rm -it --privileged \
 4. 找到并安装 **OPKG 软件包管理器**：
    > 允许安装 OpenWRT 软件包以扩展路由器功能。
    > 社区支持可在 [forum.keenetic.ru](https://forum.keenetic.ru) 获得。Keenetic 官方技术支持不涵盖此类问题。
-5. 路由器将重启，自动检测 USB 闪存盘并安装 Entware
+5. 路由器将重启并自动开始安装 Entware
 
-### 第二步：启用 SWAP
+可以在路由器日志中监控安装进度：
+**诊断** → **常规** → **日志** (`/diagnostics/general/log`)
 
-Entware 安装完成后，通过 SSH 连接路由器以启用 SWAP：
-
-```bash
-ssh admin@192.168.1.1
+安装完成后，您将看到：
+```
+[5/5] "Entware" 软件包系统安装完成！
+请不要忘记更改密码和端口号！
 ```
 
-执行以下命令：
+### 第二步：更改密码并配置 SSH
+
+安装完成后，Entware 提供独立的 SSH 访问（Dropbear）：
+- **用户名：** `root`
+- **密码：** `keenetic`
+- **端口：** `222`
+
+连接并立即更改默认密码：
+
+```bash
+ssh root@192.168.1.1 -p 222
+passwd
+```
+
+#### 配置 SSH 端口
+
+安装 Entware 后，您将拥有两个 SSH 服务。建议将 Keenetic 内置 SSH 移至其他端口以避免冲突：
+
+**方法 A：通过 Web 界面**
+1. 打开路由器管理界面 → **管理** → **常规设置**
+2. 找到 **命令行** 或 **远程访问** 部分
+3. 将 SSH 端口从 `22` 更改为 `2222`
+
+**方法 B：通过 Keenetic CLI**
+```bash
+ssh admin@192.168.1.1 -p 22
+
+(config)> ip ssh
+(config-ssh)> port 2222
+(config-ssh)> exit
+(config)> system configuration save
+```
+
+配置完成后，您将拥有两个独立的 SSH 连接：
+
+```bash
+# Keenetic CLI（路由器管理）
+ssh admin@192.168.1.1 -p 2222
+
+# Entware shell（完整 Linux 环境）
+ssh root@192.168.1.1 -p 22
+```
+
+> 如需更改 Entware SSH 端口，可编辑 `/opt/etc/config/dropbear.conf`。
+
+### 第三步：启用 SWAP（推荐）
+
+启用 Swap 可以显著提高运行多个 Entware 软件包时的稳定性。通过 SSH 连接 Entware 并执行：
 
 ```bash
 # 检查是否检测到 swap 分区
@@ -124,8 +172,7 @@ free
 要使 swap 在重启后自动启用，创建启动脚本：
 
 ```bash
-# 创建启动脚本
-cat >> /opt/etc/init.d/S01swap <<'SWAP'
+cat > /opt/etc/init.d/S01swap <<'SWAP'
 #!/bin/sh
 case "$1" in
   start)
@@ -139,7 +186,7 @@ SWAP
 chmod +x /opt/etc/init.d/S01swap
 ```
 
-### 第三步：验证
+### 第四步：验证
 
 ```bash
 # 检查 Entware 是否正常工作

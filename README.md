@@ -98,17 +98,65 @@ docker run --rm -it --privileged \
 4. Find and install **OPKG Package Manager**:
    > Allows installing OpenWRT packages to extend the router's functionality.
    > Community support is available at [forum.keenetic.ru](https://forum.keenetic.ru). Keenetic technical support does not cover these topics.
-5. The router will reboot, detect the USB drive, and install Entware automatically
+5. The router will reboot and start installing Entware automatically
 
-### Step 2: Enable SWAP
+You can monitor the installation progress in the router log:
+**Diagnostics** → **General** → **Log** (`/diagnostics/general/log`)
 
-After Entware is installed, connect to the router via SSH to enable SWAP:
-
-```bash
-ssh admin@192.168.1.1
+When finished, you will see:
+```
+[5/5] Installation of "Entware" package system is complete!
+Don't forget to change the password and port number!
 ```
 
-Then run the following commands:
+### Step 2: Change Password and Configure SSH
+
+After installation, Entware provides its own SSH access (Dropbear):
+- **Login:** `root`
+- **Password:** `keenetic`
+- **Port:** `222`
+
+Connect and change the default password immediately:
+
+```bash
+ssh root@192.168.1.1 -p 222
+passwd
+```
+
+#### Configure SSH Ports
+
+After installing Entware, you will have two SSH services. It's recommended to move the built-in Keenetic SSH to a different port to avoid conflicts:
+
+**Option A: Via web UI**
+1. Open router web UI → **Management** → **General Settings**
+2. Find **Command Line** or **Remote Access** section
+3. Change SSH port from `22` to `2222`
+
+**Option B: Via Keenetic CLI**
+```bash
+ssh admin@192.168.1.1 -p 22
+
+(config)> ip ssh
+(config-ssh)> port 2222
+(config-ssh)> exit
+(config)> system configuration save
+```
+
+After configuration, you will have two separate SSH connections:
+
+```bash
+# Keenetic CLI (router management)
+ssh admin@192.168.1.1 -p 2222
+
+# Entware shell (full Linux environment)
+ssh root@192.168.1.1 -p 22
+```
+
+> Entware SSH port can be changed in `/opt/etc/config/dropbear.conf` if needed.
+
+### Step 3: Enable SWAP (Recommended)
+
+Swap significantly improves stability when running multiple Entware packages. Connect to Entware via SSH and run:
 
 ```bash
 # Check if the swap partition is detected
@@ -121,11 +169,10 @@ swapon /dev/sda1
 free
 ```
 
-To make swap persistent across reboots, add it to the startup script:
+To make swap persistent across reboots, create a startup script:
 
 ```bash
-# Create or edit the startup script
-cat >> /opt/etc/init.d/S01swap <<'SWAP'
+cat > /opt/etc/init.d/S01swap <<'SWAP'
 #!/bin/sh
 case "$1" in
   start)
@@ -139,7 +186,7 @@ SWAP
 chmod +x /opt/etc/init.d/S01swap
 ```
 
-### Step 3: Verify
+### Step 4: Verify
 
 ```bash
 # Check Entware is working

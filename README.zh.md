@@ -192,13 +192,24 @@ free -m
 > ```bash
 > cat > /opt/etc/init.d/S01swap <<'SWAP'
 > #!/bin/sh
+> find_swap() {
+>     if command -v blkid >/dev/null 2>&1; then
+>         OPKG=$(blkid -L OPKG 2>/dev/null)
+>         [ -n "$OPKG" ] && DEV=$(echo "$OPKG" | sed 's/2$/1/') && [ -b "$DEV" ] && echo "$DEV" && return
+>     fi
+>     for d in /dev/sda1 /dev/sdb1 /dev/sdc1; do [ -b "$d" ] && echo "$d" && return; done
+>     return 1
+> }
 > case "$1" in
 >   start)
->     DEV=$(blkid -L OPKG 2>/dev/null | sed 's/2$/1/')
->     [ -b "$DEV" ] || DEV=/dev/sda1
->     swapon "$DEV" 2>/dev/null || { mkswap -L SWAP "$DEV" && swapon "$DEV"; }
+>     DEV=$(find_swap) || { echo "SWAP not found"; exit 1; }
+>     swapon "$DEV" 2>/dev/null || { mkswap -L SWAP "$DEV" >/dev/null 2>&1; swapon "$DEV"; }
+>     echo "SWAP started on $DEV"
 >     ;;
 >   stop) swapoff -a 2>/dev/null ;;
+>   restart) "$0" stop; sleep 1; "$0" start ;;
+>   status) cat /proc/swaps; free -m | grep -i swap ;;
+>   *) echo "Usage: $0 {start|stop|restart|status}" ;;
 > esac
 > SWAP
 > chmod +x /opt/etc/init.d/S01swap

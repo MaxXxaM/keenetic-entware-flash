@@ -168,31 +168,73 @@ ssh root@192.168.1.1 -p 22
 
 ### Step 3: Enable SWAP (Recommended)
 
-Swap significantly improves stability when running multiple Entware packages. Connect to Entware via SSH and run:
+Swap significantly improves stability when running multiple Entware packages. SWAP **does not activate automatically** without an init script — after each router reboot `free -m` will show `Swap: 0`.
+
+The auto-start script is already saved to the USB drive during flashing. Connect to Entware via SSH and follow these steps:
+
+#### 3.1. Identify the SWAP Partition
 
 ```bash
-# Enable swap
-swapon /dev/sda1
+# List all partitions
+cat /proc/partitions
 
-# Verify swap is active
-free
+# Identify partition types
+blkid
 ```
 
-To make swap persistent across reboots, create a startup script:
+Find the partition with `LABEL="SWAP"` — usually `/dev/sda1` or `/dev/sdc1`.
+
+#### 3.2. Initialize and Activate SWAP
 
 ```bash
-cat > /opt/etc/init.d/S01swap <<'SWAP'
-#!/bin/sh
-case "$1" in
-  start)
-    swapon /dev/sda1
-    ;;
-  stop)
-    swapoff /dev/sda1
-    ;;
-esac
-SWAP
+# Replace /dev/sda1 with your SWAP partition from blkid
+mkswap /dev/sda1
+swapon /dev/sda1
+```
+
+Verify:
+
+```bash
+cat /proc/swaps
+free -m
+# The Swap line should show values (e.g., Swap: 1023 MB)
+```
+
+#### 3.3. Install the Auto-Start Script
+
+The script is already on the USB drive at `/opt/scripts/S01swap`. It auto-detects the SWAP partition by label, so no manual device configuration is needed.
+
+```bash
+# Copy the script to init.d
+cp /opt/scripts/S01swap /opt/etc/init.d/S01swap
 chmod +x /opt/etc/init.d/S01swap
+
+# Check status
+/opt/etc/init.d/S01swap status
+
+# Restart to verify
+/opt/etc/init.d/S01swap restart
+```
+
+> If the script is missing from `/opt/scripts/`, create it manually:
+> ```bash
+> cat > /opt/etc/init.d/S01swap <<'SWAP'
+> #!/bin/sh
+> case "$1" in
+>   start) swapon $(blkid -L SWAP 2>/dev/null || echo /dev/sda1) 2>/dev/null ;;
+>   stop)  swapoff -a 2>/dev/null ;;
+> esac
+> SWAP
+> chmod +x /opt/etc/init.d/S01swap
+> ```
+
+#### 3.4. Verify After Reboot
+
+```bash
+# Reboot the router and reconnect
+free -m
+cat /proc/swaps
+# The Swap line should show values — auto-start is working
 ```
 
 ### Step 4: Verify
@@ -203,7 +245,7 @@ opkg update
 opkg list-installed
 
 # Check swap is active
-free
+free -m
 ```
 
 More info: [help.keenetic.com](https://help.keenetic.com/hc/en/articles/360021888880)

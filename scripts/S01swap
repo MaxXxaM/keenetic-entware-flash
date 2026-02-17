@@ -1,0 +1,88 @@
+#!/bin/sh
+#
+# SWAP auto-start script for Keenetic routers with Entware
+#
+# Installation:
+#   cp /opt/scripts/S01swap /opt/etc/init.d/S01swap
+#   chmod +x /opt/etc/init.d/S01swap
+#
+# Usage:
+#   /opt/etc/init.d/S01swap {start|stop|restart|status}
+#
+
+ENABLED=yes
+
+# Auto-detect SWAP partition by label, fallback to common device names
+find_swap_device() {
+    # Try to find by LABEL="SWAP" using blkid
+    if command -v blkid >/dev/null 2>&1; then
+        DEVICE=$(blkid -L SWAP 2>/dev/null)
+        if [ -n "$DEVICE" ]; then
+            echo "$DEVICE"
+            return 0
+        fi
+    fi
+
+    # Fallback: check common device names for swap type
+    for dev in /dev/sda1 /dev/sdb1 /dev/sdc1; do
+        if [ -b "$dev" ]; then
+            if blkid "$dev" 2>/dev/null | grep -q 'TYPE="swap"'; then
+                echo "$dev"
+                return 0
+            fi
+        fi
+    done
+
+    return 1
+}
+
+start() {
+    if [ "$ENABLED" != "yes" ]; then
+        echo "SWAP is disabled (ENABLED=$ENABLED)"
+        return 0
+    fi
+
+    SWAP_DEVICE=$(find_swap_device)
+    if [ -z "$SWAP_DEVICE" ]; then
+        echo "SWAP device not found"
+        return 1
+    fi
+
+    echo "Starting SWAP on $SWAP_DEVICE..."
+    swapon "$SWAP_DEVICE" 2>/dev/null || true
+}
+
+stop() {
+    echo "Stopping SWAP..."
+    swapoff -a 2>/dev/null || true
+}
+
+status() {
+    echo "SWAP status:"
+    cat /proc/swaps
+    echo ""
+    free -m | grep -i swap
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        stop
+        sleep 1
+        start
+        ;;
+    status)
+        status
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+
+exit 0

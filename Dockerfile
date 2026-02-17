@@ -27,6 +27,7 @@ RUN mkdir -p /opt/entware-installers && \
         https://bin.entware.net/aarch64-k3.10/installer/aarch64-installer.tar.gz
 
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY scripts/ /opt/scripts/
+RUN chmod +x /entrypoint.sh /opt/scripts/*
 
 ENTRYPOINT ["/entrypoint.sh"]

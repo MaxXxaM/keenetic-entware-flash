@@ -255,69 +255,85 @@ partition_disk() {
 }
 
 # ============================================================================
-# Entware installation
+# Find ext4 partition device
 # ============================================================================
-install_entware() {
-    if [ "$SKIP_ENTWARE" = "1" ]; then
-        echo ""
-        echo ">>> Skipping Entware download (SKIP_ENTWARE=1)."
-        return 0
-    fi
-
-    local part2
+find_ext4_partition() {
     local loop_name
     loop_name=$(basename "$DEVICE")
     if [ -e "${DEVICE}p2" ]; then
-        part2="${DEVICE}p2"
+        echo "${DEVICE}p2"
     elif [ -e "${DEVICE}2" ]; then
-        part2="${DEVICE}2"
+        echo "${DEVICE}2"
     elif [ -e "/dev/mapper/${loop_name}p2" ]; then
-        part2="/dev/mapper/${loop_name}p2"
+        echo "/dev/mapper/${loop_name}p2"
     else
+        echo ""
+    fi
+}
+
+# ============================================================================
+# Entware installation & scripts
+# ============================================================================
+install_entware() {
+    local part2
+    part2=$(find_ext4_partition)
+    if [ -z "$part2" ]; then
         echo "ERROR: ext4 partition not found."
         exit 1
     fi
-
-    local filename="${ARCH}-installer.tar.gz"
-
-    local url_arch_dir
-    case "$ARCH" in
-        mipsel)  url_arch_dir="mipselsf-k3.4" ;;
-        mips)    url_arch_dir="mipssf-k3.4" ;;
-        aarch64) url_arch_dir="aarch64-k3.10" ;;
-    esac
-
-    local url="https://bin.entware.net/${url_arch_dir}/installer/${filename}"
-    local fallback="/opt/entware-installers/${filename}"
 
     echo ""
     echo ">>> Mounting ext4 partition..."
     mkdir -p "$MOUNT_POINT"
     mount "$part2" "$MOUNT_POINT"
 
-    echo ">>> Creating install directory..."
-    mkdir -p "${MOUNT_POINT}/install"
-
-    echo ">>> Downloading Entware installer..."
-    echo "    URL: $url"
-
-    if wget -q --show-progress -O "${MOUNT_POINT}/install/${filename}" "$url" 2>&1 && \
-       [ -s "${MOUNT_POINT}/install/${filename}" ]; then
-        echo ">>> Entware installer downloaded successfully."
+    # Download Entware installer
+    if [ "$SKIP_ENTWARE" = "1" ]; then
+        echo ">>> Skipping Entware download (SKIP_ENTWARE=1)."
     else
-        rm -f "${MOUNT_POINT}/install/${filename}"
-        if [ -s "$fallback" ]; then
-            echo ">>> Download failed, using built-in fallback..."
-            cp "$fallback" "${MOUNT_POINT}/install/${filename}"
-            echo ">>> Entware installer copied from fallback."
+        local filename="${ARCH}-installer.tar.gz"
+
+        local url_arch_dir
+        case "$ARCH" in
+            mipsel)  url_arch_dir="mipselsf-k3.4" ;;
+            mips)    url_arch_dir="mipssf-k3.4" ;;
+            aarch64) url_arch_dir="aarch64-k3.10" ;;
+        esac
+
+        local url="https://bin.entware.net/${url_arch_dir}/installer/${filename}"
+        local fallback="/opt/entware-installers/${filename}"
+
+        echo ">>> Creating install directory..."
+        mkdir -p "${MOUNT_POINT}/install"
+
+        echo ">>> Downloading Entware installer..."
+        echo "    URL: $url"
+
+        if wget -q --show-progress -O "${MOUNT_POINT}/install/${filename}" "$url" 2>&1 && \
+           [ -s "${MOUNT_POINT}/install/${filename}" ]; then
+            echo ">>> Entware installer downloaded successfully."
         else
-            echo "WARNING: Failed to download Entware installer and no fallback available."
-            echo "URL: $url"
-            echo ""
-            echo "You can download it manually later and place it in the /install/ directory."
-            echo "Or enable OPKG in router settings — the router will install Entware itself."
+            rm -f "${MOUNT_POINT}/install/${filename}"
+            if [ -s "$fallback" ]; then
+                echo ">>> Download failed, using built-in fallback..."
+                cp "$fallback" "${MOUNT_POINT}/install/${filename}"
+                echo ">>> Entware installer copied from fallback."
+            else
+                echo "WARNING: Failed to download Entware installer and no fallback available."
+                echo "URL: $url"
+                echo ""
+                echo "You can download it manually later and place it in the /install/ directory."
+                echo "Or enable OPKG in router settings — the router will install Entware itself."
+            fi
         fi
     fi
+
+    # Copy SWAP init script (always, regardless of SKIP_ENTWARE)
+    echo ">>> Copying SWAP init script..."
+    mkdir -p "${MOUNT_POINT}/scripts"
+    cp /opt/scripts/S01swap "${MOUNT_POINT}/scripts/S01swap"
+    chmod +x "${MOUNT_POINT}/scripts/S01swap"
+    echo ">>> SWAP script saved to /scripts/S01swap on the USB drive."
 
     echo ">>> Unmounting..."
     umount "$MOUNT_POINT"
@@ -340,6 +356,10 @@ show_success() {
         echo "Entware architecture: $ARCH ($(arch_to_path "$ARCH"))"
         echo ""
     fi
+    echo "SWAP auto-start script: /scripts/S01swap"
+    echo "  After OPKG installation, copy it to enable auto-start:"
+    echo "  cp /opt/scripts/S01swap /opt/etc/init.d/S01swap"
+    echo ""
 }
 
 # ============================================================================

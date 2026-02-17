@@ -168,31 +168,73 @@ ssh root@192.168.1.1 -p 22
 
 ### Шаг 3: Включение SWAP (рекомендуется)
 
-Swap значительно повышает стабильность при работе нескольких пакетов Entware. Подключитесь к Entware по SSH и выполните:
+Swap значительно повышает стабильность при работе нескольких пакетов Entware. SWAP **не активируется автоматически** без init-скрипта — после каждой перезагрузки роутера `free -m` покажет `Swap: 0`.
+
+Скрипт автозапуска уже записан на флешку при прошивке. Подключитесь к Entware по SSH и выполните:
+
+#### 3.1. Определите SWAP раздел
 
 ```bash
-# Включить swap
-swapon /dev/sda1
+# Посмотрите все разделы
+cat /proc/partitions
 
-# Проверить, что swap активен
-free
+# Определите тип разделов
+blkid
 ```
 
-Чтобы swap включался автоматически после перезагрузки, создайте скрипт:
+Найдите раздел с меткой `LABEL="SWAP"` — обычно это `/dev/sda1` или `/dev/sdc1`.
+
+#### 3.2. Инициализируйте и активируйте SWAP
 
 ```bash
-cat > /opt/etc/init.d/S01swap <<'SWAP'
-#!/bin/sh
-case "$1" in
-  start)
-    swapon /dev/sda1
-    ;;
-  stop)
-    swapoff /dev/sda1
-    ;;
-esac
-SWAP
+# Замените /dev/sda1 на ваш SWAP раздел из blkid
+mkswap /dev/sda1
+swapon /dev/sda1
+```
+
+Проверьте:
+
+```bash
+cat /proc/swaps
+free -m
+# В строке Swap должны быть значения (например, Swap: 1023 MB)
+```
+
+#### 3.3. Установите скрипт автозапуска
+
+Скрипт уже лежит на флешке в `/opt/scripts/S01swap`. Он автоматически определяет SWAP раздел по метке, поэтому вручную указывать устройство не нужно.
+
+```bash
+# Скопируйте скрипт в init.d
+cp /opt/scripts/S01swap /opt/etc/init.d/S01swap
 chmod +x /opt/etc/init.d/S01swap
+
+# Проверьте статус
+/opt/etc/init.d/S01swap status
+
+# Перезапустите для проверки
+/opt/etc/init.d/S01swap restart
+```
+
+> Если скрипта нет в `/opt/scripts/`, создайте вручную:
+> ```bash
+> cat > /opt/etc/init.d/S01swap <<'SWAP'
+> #!/bin/sh
+> case "$1" in
+>   start) swapon $(blkid -L SWAP 2>/dev/null || echo /dev/sda1) 2>/dev/null ;;
+>   stop)  swapoff -a 2>/dev/null ;;
+> esac
+> SWAP
+> chmod +x /opt/etc/init.d/S01swap
+> ```
+
+#### 3.4. Проверка после перезагрузки
+
+```bash
+# Перезагрузите роутер и подключитесь снова
+free -m
+cat /proc/swaps
+# В строке Swap должны быть значения — значит автозапуск работает
 ```
 
 ### Шаг 4: Проверка
@@ -203,7 +245,7 @@ opkg update
 opkg list-installed
 
 # Проверить, что swap активен
-free
+free -m
 ```
 
 Подробнее: [help.keenetic.com](https://help.keenetic.com/hc/ru/articles/360021888880)

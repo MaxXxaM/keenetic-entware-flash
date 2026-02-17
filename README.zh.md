@@ -330,6 +330,45 @@ docker build --platform linux/amd64 \
   -t keenetic-entware-flash .
 ```
 
+## USB 克隆（备份 / 恢复）
+
+路由器中的 USB 闪存盘 24/7 全天候运行，可能会磨损。使用 `clone.sh` 创建 USB 闪存盘的完整逐字节备份，并恢复到新的闪存盘 — 无需 Docker。
+
+### 备份（USB → 文件）
+
+```bash
+# 交互式选择 USB 设备
+sudo ./clone.sh backup
+
+# 直接指定设备
+sudo ./clone.sh backup /dev/disk4          # macOS
+sudo ./clone.sh backup /dev/sdb            # Linux
+
+# 自定义输出路径
+sudo ./clone.sh backup /dev/disk4 ~/backup.img
+
+# 压缩备份（gzip）
+sudo ./clone.sh backup --compress
+sudo ./clone.sh backup /dev/disk4 --compress
+```
+
+默认输出：`~/keenetic-backup-YYYY-MM-DD.img`
+
+### 恢复（文件 → USB）
+
+```bash
+# 交互式选择 USB 设备
+sudo ./clone.sh restore backup.img
+
+# 直接指定设备
+sudo ./clone.sh restore backup.img /dev/disk4
+```
+
+- 压缩镜像（`.img.gz`）会自动检测
+- 恢复时跳过空块，写入速度提升 60-80%
+- 脚本会检查镜像是否能放入目标磁盘
+- 写入前需要用户确认
+
 ## 故障排除
 
 **"No external USB devices found"** — 请插入 USB 闪存盘后重试。

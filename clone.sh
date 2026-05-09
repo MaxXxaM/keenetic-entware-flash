@@ -8,6 +8,12 @@ set -euo pipefail
 DISK=""
 DD_PID=""
 OS="$(uname -s)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REMOTE_IMAGE="ghcr.io/maxxxam/keenetic-entware-flash:main"
+LOCAL_IMAGE="keenetic-entware-flash"
+TMP_FILES=()
+DECOMPRESSED_IMAGE=""
+EXPANDED_IMAGE=""
 
 show_help() {
     cat <<'HELP'
@@ -30,6 +36,7 @@ Restore:
 
 Options:
   --compress    Compress backup with gzip (.img.gz)
+  --no-expand   Restore exact image size, do not grow ext4 partition
   -h, --help    Show this help
 HELP
     exit 0
@@ -182,10 +189,12 @@ get_disk_size() {
 # ============================================================================
 format_size() {
     local bytes="$1"
-    awk "BEGIN {
-        if ($bytes >= 1073741824) printf \"%.1f GB\", $bytes / 1073741824
+    LC_ALL=C awk "BEGIN {
+        if ($bytes >= 1099511627776) printf \"%.1f TB\", $bytes / 1099511627776
+        else if ($bytes >= 1073741824) printf \"%.1f GB\", $bytes / 1073741824
         else if ($bytes >= 1048576) printf \"%.1f MB\", $bytes / 1048576
-        else printf \"%.1f KB\", $bytes / 1024
+        else if ($bytes >= 1024) printf \"%.1f KB\", $bytes / 1024
+        else printf \"%d B\", $bytes
     }"
 }
 
@@ -197,8 +206,329 @@ cleanup() {
         kill "$DD_PID" 2>/dev/null || true
         wait "$DD_PID" 2>/dev/null || true
     fi
+    local file
+    for file in "${TMP_FILES[@]:-}"; do
+        [ -n "$file" ] && [ -f "$file" ] && rm -f "$file"
+    done
+    return 0
 }
 trap cleanup EXIT
+
+track_tmp_file() {
+    TMP_FILES+=("$1")
+}
+
+get_file_size() {
+    local file="$1"
+    stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null
+}
+
+copy_with_progress() {
+    local label="$1"
+    local src="$2"
+    local dst="$3"
+    local total="$4"
+
+    python3 - "$label" "$src" "$dst" "$total" <<'PY'
+import os
+import stat
+import sys
+import time
+
+BLOCK = 4 * 1024 * 1024
+label, src, dst, total_arg = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+total = int(total_arg) if total_arg.isdigit() else 0
+done = 0
+started = time.monotonic()
+last_report = 0.0
+out_stream = sys.stderr if dst == "-" else sys.stdout
+
+
+def human(value):
+    value = float(value)
+    units = ("B", "KB", "MB", "GB", "TB")
+    idx = 0
+    while value >= 1024 and idx < len(units) - 1:
+        value /= 1024
+        idx += 1
+    if idx == 0:
+        return "%d B" % int(value)
+    return "%.1f %s" % (value, units[idx])
+
+
+def report(final=False):
+    global last_report
+    now = time.monotonic()
+    if not final and now - last_report < 0.2:
+        return
+    last_report = now
+
+    elapsed = max(now - started, 0.001)
+    speed = done / elapsed
+    if total > 0:
+        left = max(total - done, 0)
+        pct = min(done * 100 // total, 100)
+        line = "    %s: %s / %s (%d%%), left %s, %s/s" % (
+            label, human(done), human(total), pct, human(left), human(speed)
+        )
+    else:
+        line = "    %s: %s, %s/s" % (label, human(done), human(speed))
+
+    out_stream.write("\r" + line + " " * 8)
+    out_stream.flush()
+    if final:
+        out_stream.write("\n")
+        out_stream.flush()
+
+
+src_f = sys.stdin.buffer if src == "-" else open(src, "rb", buffering=0)
+if dst == "-":
+    dst_f = sys.stdout.buffer
+    dst_fd = None
+else:
+    dst_fd = os.open(dst, os.O_WRONLY | os.O_CREAT, 0o666)
+    dst_f = os.fdopen(dst_fd, "wb", buffering=0, closefd=False)
+
+try:
+    while True:
+        data = src_f.read(BLOCK)
+        if not data:
+            break
+        dst_f.write(data)
+        done += len(data)
+        report()
+    dst_f.flush()
+    if dst_fd is not None and stat.S_ISREG(os.fstat(dst_fd).st_mode):
+        os.ftruncate(dst_fd, done)
+    report(final=True)
+finally:
+    if src != "-":
+        src_f.close()
+    if dst != "-":
+        dst_f.close()
+        os.close(dst_fd)
+PY
+}
+
+copy_raw_image_sparse() {
+    local src="$1"
+    local dst="$2"
+
+    python3 - "$src" "$dst" <<'PY'
+import os
+import sys
+import time
+
+BLOCK = 4 * 1024 * 1024
+src, dst = sys.argv[1], sys.argv[2]
+total = os.path.getsize(src)
+zero = b"\x00" * BLOCK
+written = 0
+offset = 0
+started = time.monotonic()
+last_report = 0.0
+
+
+def human(value):
+    value = float(value)
+    units = ("B", "KB", "MB", "GB", "TB")
+    idx = 0
+    while value >= 1024 and idx < len(units) - 1:
+        value /= 1024
+        idx += 1
+    if idx == 0:
+        return "%d B" % int(value)
+    return "%.1f %s" % (value, units[idx])
+
+
+def report(final=False):
+    global last_report
+    now = time.monotonic()
+    if not final and now - last_report < 0.2:
+        return
+    last_report = now
+    pct = offset * 100 // total if total else 100
+    left = max(total - offset, 0)
+    speed = offset / max(now - started, 0.001)
+    line = "    Prepared: %s / %s (%d%%), left %s, copied %s, %s/s" % (
+        human(offset), human(total), pct, human(left), human(written), human(speed)
+    )
+    sys.stdout.write("\r" + line + " " * 8)
+    sys.stdout.flush()
+    if final:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+fd = os.open(dst, os.O_WRONLY)
+try:
+    with open(src, "rb") as f:
+        while offset < total:
+            data = f.read(BLOCK)
+            if not data:
+                break
+            if data != zero[:len(data)]:
+                os.lseek(fd, offset, os.SEEK_SET)
+                os.write(fd, data)
+                written += len(data)
+            offset += len(data)
+            report()
+finally:
+    os.close(fd)
+
+report(final=True)
+PY
+}
+
+restore_raw_image() {
+    local src="$1"
+    local dst="$2"
+    local total
+    total=$(get_file_size "$src")
+    copy_with_progress "Written" "$src" "$dst" "$total"
+}
+
+get_docker_image() {
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "ERROR: Docker is required to expand ext4 images on macOS." >&2
+        echo "Install Docker Desktop or run restore with --no-expand." >&2
+        exit 1
+    fi
+
+    if docker image inspect "$LOCAL_IMAGE" >/dev/null 2>&1; then
+        echo "$LOCAL_IMAGE"
+    elif docker image inspect "$REMOTE_IMAGE" >/dev/null 2>&1; then
+        echo "$REMOTE_IMAGE"
+    else
+        echo ">>> Pulling helper image for ext4 expansion..." >&2
+        if docker pull --platform linux/amd64 "$REMOTE_IMAGE" 2>/dev/null; then
+            echo "$REMOTE_IMAGE"
+        else
+            echo ">>> Pull failed, building helper image locally..." >&2
+            docker build --platform linux/amd64 \
+                --build-arg BASE_IMAGE=cr.yandex/mirror/ubuntu:22.04 \
+                --build-arg APT_MIRROR=http://mirror.yandex.ru \
+                -t "$LOCAL_IMAGE" "$SCRIPT_DIR" >&2
+            echo "$LOCAL_IMAGE"
+        fi
+    fi
+}
+
+expand_ext4_image_with_docker() {
+    local image_file="$1"
+    local helper_image
+    helper_image=$(get_docker_image)
+
+    docker run --rm --privileged --platform linux/amd64 \
+        --entrypoint /bin/bash \
+        -v "$image_file":/dev/target \
+        "$helper_image" -lc '
+set -euo pipefail
+
+LOOP_DEVICE=$(losetup --find --show /dev/target)
+KPARTX_ACTIVE=0
+cleanup() {
+    if [ "$KPARTX_ACTIVE" = "1" ]; then
+        kpartx -dv "$LOOP_DEVICE" 2>/dev/null || true
+    fi
+    losetup -d "$LOOP_DEVICE" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+parted -s "$LOOP_DEVICE" resizepart 2 100%
+
+PART2="${LOOP_DEVICE}p2"
+if [ ! -e "$PART2" ]; then
+    kpartx -av "$LOOP_DEVICE"
+    KPARTX_ACTIVE=1
+    PART2="/dev/mapper/$(basename "$LOOP_DEVICE")p2"
+fi
+if [ ! -e "$PART2" ]; then
+    echo "ERROR: ext4 partition device not found after kpartx: $PART2" >&2
+    exit 1
+fi
+
+e2fsck -fy "$PART2"
+resize2fs "$PART2"
+parted -s "$LOOP_DEVICE" print
+'
+}
+
+expand_ext4_image_locally() {
+    local image_file="$1"
+
+    for cmd in losetup parted partprobe e2fsck resize2fs kpartx; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            echo "ERROR: $cmd is required to expand ext4 images on Linux." >&2
+            echo "Install parted/e2fsprogs/util-linux or run restore with --no-expand." >&2
+            exit 1
+        fi
+    done
+
+    local loop_device part2
+    loop_device=$(losetup --find --show "$image_file")
+    part2="${loop_device}p2"
+    local kpartx_active=0
+
+    parted -s "$loop_device" resizepart 2 100%
+
+    if [ ! -e "$part2" ]; then
+        kpartx -av "$loop_device"
+        kpartx_active=1
+        part2="/dev/mapper/$(basename "$loop_device")p2"
+    fi
+
+    if [ ! -e "$part2" ]; then
+        [ "$kpartx_active" = "1" ] && kpartx -dv "$loop_device" 2>/dev/null || true
+        losetup -d "$loop_device" 2>/dev/null || true
+        echo "ERROR: ext4 partition device not found after kpartx: $part2" >&2
+        exit 1
+    fi
+
+    e2fsck -fy "$part2"
+    resize2fs "$part2"
+    parted -s "$loop_device" print
+    [ "$kpartx_active" = "1" ] && kpartx -dv "$loop_device" 2>/dev/null || true
+    losetup -d "$loop_device"
+}
+
+expand_ext4_image() {
+    local image_file="$1"
+
+    echo ">>> Expanding partition 2 (ext4) to fill target size..."
+    if [ "$OS" = "Darwin" ]; then
+        expand_ext4_image_with_docker "$image_file"
+    else
+        expand_ext4_image_locally "$image_file"
+    fi
+}
+
+prepare_expanded_restore_image() {
+    local raw_image="$1"
+    local disk_size="$2"
+    local expanded_image
+
+    expanded_image=$(mktemp "/tmp/keenetic-restore-expanded-XXXXXX")
+    track_tmp_file "$expanded_image"
+
+    truncate -s "$disk_size" "$expanded_image"
+    echo ">>> Creating expanded sparse image..."
+    copy_raw_image_sparse "$raw_image" "$expanded_image"
+    expand_ext4_image "$expanded_image"
+
+    EXPANDED_IMAGE="$expanded_image"
+}
+
+decompress_gzip_to_temp() {
+    local image="$1"
+    local raw_image
+
+    raw_image=$(mktemp "/tmp/keenetic-restore-raw-XXXXXX")
+    track_tmp_file "$raw_image"
+
+    echo ">>> Decompressing image for expansion..."
+    gunzip -c "$image" > "$raw_image"
+    DECOMPRESSED_IMAGE="$raw_image"
+}
 
 # ============================================================================
 # Backup: USB → file
@@ -271,27 +601,9 @@ do_backup() {
     echo ">>> Reading from $read_device..."
 
     if [ "$compress" -eq 1 ]; then
-        # Backup with compression
-        if [ "$OS" = "Darwin" ]; then
-            dd if="$read_device" bs=4m 2>/dev/null | pv -s "$disk_size" | gzip > "$output"
-        else
-            dd if="$read_device" bs=4M status=progress 2>&1 | gzip > "$output"
-        fi
+        copy_with_progress "Read" "$read_device" - "$disk_size" | gzip > "$output"
     else
-        # Backup without compression
-        if [ "$OS" = "Darwin" ]; then
-            dd if="$read_device" of="$output" bs=4m &
-            DD_PID=$!
-            # Send SIGINFO every 5 seconds for progress
-            while kill -0 "$DD_PID" 2>/dev/null; do
-                sleep 5
-                kill -INFO "$DD_PID" 2>/dev/null || true
-            done
-            wait "$DD_PID" || true
-            DD_PID=""
-        else
-            dd if="$read_device" of="$output" bs=4M status=progress
-        fi
+        copy_with_progress "Read" "$read_device" "$output" "$disk_size"
     fi
 
     local output_size
@@ -316,10 +628,13 @@ do_backup() {
 do_restore() {
     local image=""
     local device=""
+    local expand=1
 
     # Parse arguments
     for arg in "$@"; do
-        if [ -z "$image" ] && [[ "$arg" != /dev/* ]]; then
+        if [ "$arg" = "--no-expand" ]; then
+            expand=0
+        elif [ -z "$image" ] && [[ "$arg" != /dev/* ]]; then
             image="$arg"
         elif [ -z "$device" ] && [[ "$arg" == /dev/* ]]; then
             device="$arg"
@@ -372,17 +687,40 @@ do_restore() {
     local disk_size_hr
     disk_size_hr=$(format_size "$disk_size")
 
+    local restore_image="$image"
+    local restore_compressed="$compressed"
+    local restore_size="$image_size"
+
+    if [ "$expand" -eq 1 ]; then
+        if [ "$restore_compressed" -eq 1 ]; then
+            decompress_gzip_to_temp "$image"
+            restore_image="$DECOMPRESSED_IMAGE"
+            restore_compressed=0
+            restore_size=$(get_file_size "$restore_image")
+        fi
+
+        if [ "$restore_size" -gt 0 ] && [ "$disk_size" -gt "$restore_size" ]; then
+            local extra_size extra_size_hr
+            extra_size=$((disk_size - restore_size))
+            extra_size_hr=$(format_size "$extra_size")
+            echo ">>> Target is larger than image by $extra_size_hr."
+            prepare_expanded_restore_image "$restore_image" "$disk_size"
+            restore_image="$EXPANDED_IMAGE"
+            restore_size=$(get_file_size "$restore_image")
+        fi
+    fi
+
     # Check image fits on disk
-    if [ "$image_size" -gt 0 ] && [ "$image_size" -gt "$disk_size" ]; then
+    if [ "$restore_size" -gt 0 ] && [ "$restore_size" -gt "$disk_size" ]; then
         local image_size_hr
-        image_size_hr=$(format_size "$image_size")
+        image_size_hr=$(format_size "$restore_size")
         echo "ERROR: Image ($image_size_hr) is larger than target disk ($disk_size_hr)."
         exit 1
     fi
 
     local image_size_hr
-    if [ "$image_size" -gt 0 ]; then
-        image_size_hr=$(format_size "$image_size")
+    if [ "$restore_size" -gt 0 ]; then
+        image_size_hr=$(format_size "$restore_size")
     else
         image_size_hr="(unknown — compressed)"
     fi
@@ -401,6 +739,11 @@ do_restore() {
     echo "  Size:   $image_size_hr"
     if [ "$compressed" -eq 1 ]; then
         echo "  Format: gzip compressed"
+    fi
+    if [ "$expand" -eq 1 ]; then
+        echo "  Expand: yes (partition 2 ext4 grows when target is larger)"
+    else
+        echo "  Expand: no (exact image layout)"
     fi
     echo "  Target: $device ($disk_size_hr)"
     echo ""
@@ -422,42 +765,11 @@ do_restore() {
 
     echo ">>> Writing to $write_device..."
 
-    if [ "$compressed" -eq 1 ]; then
-        # Restore from compressed image — stream through gunzip
-        if [ "$OS" = "Darwin" ]; then
-            gunzip -c "$image" | dd of="$write_device" bs=4m
-        else
-            gunzip -c "$image" | dd of="$write_device" bs=4M status=progress
-        fi
+    if [ "$restore_compressed" -eq 1 ]; then
+        gunzip -c "$restore_image" | copy_with_progress "Written" - "$write_device" "$restore_size"
     else
-        # Restore from raw image — smart write (skip empty blocks)
-        echo "    (skipping empty blocks for speed)"
-        python3 -c "
-import os, sys
-BLOCK = 4 * 1024 * 1024
-src, dst = sys.argv[1], sys.argv[2]
-total = os.path.getsize(src)
-zero = b'\x00' * BLOCK
-written = 0
-offset = 0
-fd = os.open(dst, os.O_WRONLY)
-with open(src, 'rb') as f:
-    while offset < total:
-        data = f.read(BLOCK)
-        if not data:
-            break
-        if data != zero[:len(data)]:
-            os.lseek(fd, offset, os.SEEK_SET)
-            os.write(fd, data)
-            written += len(data)
-        offset += len(data)
-        pct = offset * 100 // total
-        sys.stdout.write('\r    %d%% scanned — %d MB written' % (pct, written // 1048576))
-        sys.stdout.flush()
-os.close(fd)
-print('\n    Done: %d MB written out of %d MB total (%.0f%% was empty)' % (
-    written // 1048576, total // 1048576, (total - written) * 100.0 / total))
-" "$image" "$write_device"
+        # Restore from raw image exactly, including zero-filled blocks.
+        restore_raw_image "$restore_image" "$write_device"
     fi
 
     # Eject
@@ -474,40 +786,43 @@ print('\n    Done: %d MB written out of %d MB total (%.0f%% was empty)' % (
     echo ">>> Restore complete!"
 }
 
-# ============================================================================
-# Main
-# ============================================================================
-if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-    show_help
-fi
-
-if [ -z "${1:-}" ]; then
-    show_help
-fi
-
-if [ "$(id -u)" -ne 0 ]; then
-    echo "ERROR: This script requires root privileges."
-    echo "Usage: sudo $0 backup|restore [options]"
-    exit 1
-fi
-
-COMMAND="$1"
-shift
-
-case "$COMMAND" in
-    backup)
-        do_backup "$@"
-        ;;
-    restore)
-        do_restore "$@"
-        ;;
-    -h|--help)
+main() {
+    if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
         show_help
-        ;;
-    *)
-        echo "ERROR: Unknown command: $COMMAND"
+    fi
+
+    if [ -z "${1:-}" ]; then
+        show_help
+    fi
+
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "ERROR: This script requires root privileges."
         echo "Usage: sudo $0 backup|restore [options]"
-        echo "Run '$0 --help' for details."
         exit 1
-        ;;
-esac
+    fi
+
+    local command="$1"
+    shift
+
+    case "$command" in
+        backup)
+            do_backup "$@"
+            ;;
+        restore)
+            do_restore "$@"
+            ;;
+        -h|--help)
+            show_help
+            ;;
+        *)
+            echo "ERROR: Unknown command: $command"
+            echo "Usage: sudo $0 backup|restore [options]"
+            echo "Run '$0 --help' for details."
+            exit 1
+            ;;
+    esac
+}
+
+if [ "${CLONE_SH_TESTING:-0}" != "1" ]; then
+    main "$@"
+fi

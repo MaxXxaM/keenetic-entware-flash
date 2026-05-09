@@ -332,7 +332,7 @@ docker build --platform linux/amd64 \
 
 ## USB 克隆（备份 / 恢复）
 
-路由器中的 USB 闪存盘 24/7 全天候运行，可能会磨损。使用 `clone.sh` 创建 USB 闪存盘的完整逐字节备份，并恢复到新的闪存盘 — 无需 Docker。
+路由器中的 USB 闪存盘 24/7 全天候运行，可能会磨损。使用 `clone.sh` 创建 USB 闪存盘的完整逐字节备份，并恢复到新的闪存盘。
 
 ### 备份（USB → 文件）
 
@@ -362,10 +362,16 @@ sudo ./clone.sh restore backup.img
 
 # 直接指定设备
 sudo ./clone.sh restore backup.img /dev/disk4
+
+# 恢复原始分区布局，不扩展第 2 个分区
+sudo ./clone.sh restore backup.img /dev/disk4 --no-expand
 ```
 
 - 压缩镜像（`.img.gz`）会自动检测
-- 恢复时跳过空块，写入速度提升 60-80%
+- 备份和恢复进度会在一行内显示：已完成、总大小、剩余大小和当前速度
+- Raw 镜像会精确写入，包括全零块
+- 当目标 USB 盘大于镜像时，第 2 个分区（ext4 / OPKG）会自动扩展
+- 在 macOS 上，自动扩展 ext4 使用 Docker，因为 macOS 无法原生调整 ext4 大小
 - 脚本会检查镜像是否能放入目标磁盘
 - 写入前需要用户确认
 

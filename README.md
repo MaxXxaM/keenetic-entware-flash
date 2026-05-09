@@ -332,7 +332,7 @@ docker build --platform linux/amd64 \
 
 ## USB Clone (Backup / Restore)
 
-USB drives in routers run 24/7 and can wear out. Use `clone.sh` to create a full byte-for-byte backup of your USB drive and restore it to a new one — no Docker required.
+USB drives in routers run 24/7 and can wear out. Use `clone.sh` to create a full byte-for-byte backup of your USB drive and restore it to a new one.
 
 ### Backup (USB → file)
 
@@ -362,10 +362,16 @@ sudo ./clone.sh restore backup.img
 
 # Specify device directly
 sudo ./clone.sh restore backup.img /dev/disk4
+
+# Restore exact original layout without expanding partition 2
+sudo ./clone.sh restore backup.img /dev/disk4 --no-expand
 ```
 
 - Compressed images (`.img.gz`) are detected automatically
-- Empty blocks are skipped during restore for 60-80% faster writes
+- Backup and restore progress is shown inline with done, total, remaining size, and speed
+- Raw images are written exactly, including zero-filled blocks
+- When the target drive is larger than the image, partition 2 (ext4 / OPKG) is expanded automatically
+- On macOS, automatic ext4 expansion uses Docker because macOS cannot resize ext4 filesystems natively
 - The script checks that the image fits on the target disk
 - Confirmation is required before writing
 

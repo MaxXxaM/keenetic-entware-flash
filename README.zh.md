@@ -375,6 +375,74 @@ sudo ./clone.sh restore backup.img /dev/disk4 --no-expand
 - 脚本会检查镜像是否能放入目标磁盘
 - 写入前需要用户确认
 
+## USB 健康检查
+
+路由器中的 USB 闪存盘 24/7 运行，最终会损坏。`check.sh` 用于诊断闪存盘健康状况并
+校验克隆的 Entware 布局，让你在信任数据之前就能区分将坏的盘和好盘。
+
+```bash
+# 列出所有磁盘（无需 sudo）——找到你的设备节点
+./check.sh list
+
+# 快速检查：信息、读取探测（开头/中间/结尾）、速度、只读 fsck
+sudo ./check.sh quick /dev/disk4        # macOS
+sudo ./check.sh quick /dev/sdb          # Linux
+
+# 全盘顺序读取扫描（较慢，可发现任意位置的坏块）
+sudo ./check.sh full /dev/disk4
+
+# 校验克隆的 Entware 盘：分区、ext4 fsck、swap、Entware 标记
+sudo ./check.sh entware /dev/disk4
+
+# 破坏性写入/校验测试——会清除所有数据，仅用于确认可疑盘
+sudo ./check.sh write /dev/disk4
+```
+
+### 模式
+
+| 模式 | 作用 |
+|------|------|
+| `list` | 列出每个磁盘（内置 + USB）。无需 sudo。 |
+| `quick`（默认） | 设备信息、开头/中间/结尾的读取探测、顺序读取速度、只读文件系统检查。采样约 12 MiB。 |
+| `full` | 包含 `quick` 的全部内容，外加对整个设备的全量顺序读取并显示实时进度（百分比、平均/瞬时速度、ETA）。可发现盘上任意位置的坏块。 |
+| `entware` | 校验已恢复的 Keenetic Entware 盘：分区布局、ext4 magic、`e2fsck` 完整性、swap 分区（通过 `SWAP` 卷标识别）以及 Entware 标记（`/opt`、`/bin/opkg`、`/etc/opkg.conf`、`/etc/init.d`）。 |
+| `write` | **破坏性。** 用随机模式覆盖前 256 MiB 并校验回读。需要输入 `YES`。仅用于确认盘是否正在损坏。 |
+
+### 深度校验（`entware` 与 `quick` 推荐）
+
+`entware` 和文件系统检查阶段需要 `e2fsprogs` 工具（`e2fsck`、`debugfs`）。在 macOS
+上系统不自带，且 Homebrew 以 keg-only 方式安装——`check.sh` 会自动从 Homebrew keg
+中解析它们，但你需要先安装：
+
+```bash
+brew install e2fsprogs            # macOS
+sudo apt install e2fsprogs        # Debian / Ubuntu / Linux 路由器主机
+```
+
+没有 `e2fsprogs` 时，`check.sh` 仍能通过磁盘上的 magic 签名识别分区类型，但无法运行
+完整性检查或列出文件系统内容。
+
+### 抢救将坏的盘
+
+如果 `full` 或备份以 `Input/output error` 或
+`OSError: [Errno 6] Device not configured` 中止，说明盘的控制器正在失效——普通 `dd`
+会在第一个坏扇区停止。请使用 `ddrescue`，它会跳过错误、重试，并保留映射表，便于重新
+插拔后继续：
+
+```bash
+brew install ddrescue                                            # macOS
+sudo ddrescue -d -r0 -b 4096 /dev/rdisk4 rescue.img rescue.map   # 快速首遍
+sudo ddrescue -d -r3 -R      /dev/rdisk4 rescue.img rescue.map   # 重试坏区
+```
+
+然后修复并恢复抢救出的镜像：
+
+```bash
+brew install e2fsprogs
+sudo ./clone.sh restore rescue.img /dev/diskN
+sudo ./check.sh entware /dev/diskN
+```
+
 ## 故障排除
 
 **"No external USB devices found"** — 请插入 USB 闪存盘后重试。

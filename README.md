@@ -375,6 +375,76 @@ sudo ./clone.sh restore backup.img /dev/disk4 --no-expand
 - The script checks that the image fits on the target disk
 - Confirmation is required before writing
 
+## USB Health Check
+
+USB drives in routers run 24/7 and eventually fail. `check.sh` diagnoses a drive's
+health and verifies a cloned Entware layout, so you can tell a dying drive from a
+good one before trusting it with data.
+
+```bash
+# List all disks (no sudo needed) — find your device node
+./check.sh list
+
+# Quick check: info, read probes (start/middle/end), speed, read-only fsck
+sudo ./check.sh quick /dev/disk4        # macOS
+sudo ./check.sh quick /dev/sdb          # Linux
+
+# Full read scan of the whole device (slow, catches bad blocks anywhere)
+sudo ./check.sh full /dev/disk4
+
+# Verify a cloned Entware drive: partitions, ext4 fsck, swap, Entware markers
+sudo ./check.sh entware /dev/disk4
+
+# Destructive write/verify test — WIPES ALL DATA, only for confirming a suspect drive
+sudo ./check.sh write /dev/disk4
+```
+
+### Modes
+
+| Mode | What it does |
+|------|--------------|
+| `list` | Lists every disk (internal + USB). No sudo required. |
+| `quick` (default) | Device info, read probes at start/middle/end, sequential read speed, read-only filesystem check. Samples ~12 MiB. |
+| `full` | Everything in `quick` plus a full sequential read of the entire device with live progress (percent, avg/instant speed, ETA). Reveals bad blocks anywhere on the drive. |
+| `entware` | Verifies a restored Keenetic Entware drive: partition layout, ext4 magic, `e2fsck` integrity, swap partition (recognized by the `SWAP` volume label), and Entware markers (`/opt`, `/bin/opkg`, `/etc/opkg.conf`, `/etc/init.d`). |
+| `write` | **Destructive.** Overwrites the first 256 MiB with a random pattern and verifies the read-back. Requires typing `YES`. Use only to confirm a drive is dying. |
+
+### Deep verification (recommended for `entware` and `quick`)
+
+The `entware` and filesystem-check stages need the `e2fsprogs` tools (`e2fsck`,
+`debugfs`). On macOS they are not bundled and Homebrew installs them keg-only —
+`check.sh` resolves them automatically from the Homebrew keg, but you must install
+them first:
+
+```bash
+brew install e2fsprogs            # macOS
+sudo apt install e2fsprogs        # Debian / Ubuntu / Linux router host
+```
+
+Without `e2fsprogs`, `check.sh` still detects partition types via on-disk magic
+signatures, but cannot run integrity checks or list filesystem contents.
+
+### Recovering a dying drive
+
+If `full` or a backup aborts with `Input/output error` or
+`OSError: [Errno 6] Device not configured`, the drive's controller is failing —
+plain `dd` stops at the first bad sector. Use `ddrescue`, which skips errors,
+retries, and keeps a map so you can resume after replugging:
+
+```bash
+brew install ddrescue                                            # macOS
+sudo ddrescue -d -r0 -b 4096 /dev/rdisk4 rescue.img rescue.map   # fast first pass
+sudo ddrescue -d -r3 -R      /dev/rdisk4 rescue.img rescue.map   # retry bad zones
+```
+
+Then repair and restore the rescued image:
+
+```bash
+brew install e2fsprogs
+sudo ./clone.sh restore rescue.img /dev/diskN
+sudo ./check.sh entware /dev/diskN
+```
+
 ## Troubleshooting
 
 **"No external USB devices found"** — insert a USB flash drive and try again.

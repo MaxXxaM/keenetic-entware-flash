@@ -2,3 +2,7 @@
 *.swp
 *.swo
 *~
+
+# USB backup images
+*.img
+*.img.gz

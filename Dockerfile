@@ -9,6 +9,7 @@ RUN if [ -n "$APT_MIRROR" ]; then \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         parted \
+        gdisk \
         e2fsprogs \
         dosfstools \
         kpartx \

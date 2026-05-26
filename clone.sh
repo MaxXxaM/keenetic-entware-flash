@@ -218,6 +218,32 @@ track_tmp_file() {
     TMP_FILES+=("$1")
 }
 
+# Pick a temp dir Docker Desktop can bind-mount.
+# macOS Docker Desktop by default shares only /Users, /Volumes, /private/var/folders.
+# /tmp -> /private/tmp is NOT in that list, so mktemp there breaks `docker run -v`.
+get_docker_safe_tmpdir() {
+    if [ "$OS" = "Darwin" ]; then
+        # under sudo HOME may be /var/root which Docker Desktop cannot mount;
+        # resolve original user's home via SUDO_USER
+        local home="$HOME"
+        if [ -n "${SUDO_USER:-}" ]; then
+            local sudo_home
+            sudo_home=$(eval echo "~$SUDO_USER")
+            [ -d "$sudo_home" ] && home="$sudo_home"
+        fi
+        local d="$home/.cache/keenetic-flash"
+        if mkdir -p "$d" 2>/dev/null; then
+            # ensure owner is original user, not root (so cleanup is easy)
+            [ -n "${SUDO_USER:-}" ] && chown "$SUDO_USER" "$d" 2>/dev/null || true
+            echo "$d"
+        else
+            echo "$home"
+        fi
+    else
+        echo "${TMPDIR:-/tmp}"
+    fi
+}
+
 get_file_size() {
     local file="$1"
     stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null
@@ -400,7 +426,7 @@ get_docker_image() {
         echo "$REMOTE_IMAGE"
     else
         echo ">>> Pulling helper image for ext4 expansion..." >&2
-        if docker pull --platform linux/amd64 "$REMOTE_IMAGE" 2>/dev/null; then
+        if docker pull -q --platform linux/amd64 "$REMOTE_IMAGE" >&2; then
             echo "$REMOTE_IMAGE"
         else
             echo ">>> Pull failed, building helper image locally..." >&2
@@ -433,6 +459,16 @@ cleanup() {
     losetup -d "$LOOP_DEVICE" 2>/dev/null || true
 }
 trap cleanup EXIT
+
+# Source image was sized for a smaller disk — GPT backup header still points
+# to the old end. parted refuses resizepart until that is fixed. Prefer
+# sgdisk -e (moves backup header to true end); fall back to feeding "Fix"
+# answers into interactive parted.
+if command -v sgdisk >/dev/null 2>&1; then
+    sgdisk -e "$LOOP_DEVICE"
+else
+    printf "Fix\nFix\n" | parted ---pretend-input-tty "$LOOP_DEVICE" print 2>&1 || true
+fi
 
 parted -s "$LOOP_DEVICE" resizepart 2 100%
 
@@ -507,8 +543,16 @@ prepare_expanded_restore_image() {
     local disk_size="$2"
     local expanded_image
 
-    expanded_image=$(mktemp "/tmp/keenetic-restore-expanded-XXXXXX")
+    local tmp_dir
+    tmp_dir=$(get_docker_safe_tmpdir)
+    expanded_image=$(mktemp "$tmp_dir/keenetic-restore-expanded-XXXXXX")
     track_tmp_file "$expanded_image"
+    # Docker Desktop on macOS mounts via user-space bridge as the GUI user.
+    # If file is root-owned (because sudo), Docker cannot bind-mount it.
+    if [ "$OS" = "Darwin" ] && [ -n "${SUDO_USER:-}" ]; then
+        chown "$SUDO_USER" "$expanded_image" 2>/dev/null || true
+        chmod 0666 "$expanded_image" 2>/dev/null || true
+    fi
 
     truncate -s "$disk_size" "$expanded_image"
     echo ">>> Creating expanded sparse image..."
@@ -522,8 +566,14 @@ decompress_gzip_to_temp() {
     local image="$1"
     local raw_image
 
-    raw_image=$(mktemp "/tmp/keenetic-restore-raw-XXXXXX")
+    local tmp_dir
+    tmp_dir=$(get_docker_safe_tmpdir)
+    raw_image=$(mktemp "$tmp_dir/keenetic-restore-raw-XXXXXX")
     track_tmp_file "$raw_image"
+    if [ "$OS" = "Darwin" ] && [ -n "${SUDO_USER:-}" ]; then
+        chown "$SUDO_USER" "$raw_image" 2>/dev/null || true
+        chmod 0666 "$raw_image" 2>/dev/null || true
+    fi
 
     echo ">>> Decompressing image for expansion..."
     gunzip -c "$image" > "$raw_image"

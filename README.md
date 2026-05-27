@@ -33,7 +33,48 @@ The Docker image is pulled automatically. If the registry is unavailable, it bui
 
 ## Requirements
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (macOS / Linux)
+What you need depends on which script you run:
+
+| Script | macOS | Linux |
+|--------|-------|-------|
+| `run.sh` (flash a drive) | Docker Desktop | Docker |
+| `clone.sh backup` | built-in (`dd`, `diskutil`) | built-in (`dd`, `lsblk`) |
+| `clone.sh restore` (with auto-expand) | Docker Desktop | `parted`, `e2fsprogs`, `util-linux`, `kpartx`, `gdisk` |
+| `clone.sh restore --no-expand` | built-in | built-in |
+| `check.sh` (quick / full / write) | built-in | built-in |
+| `check.sh entware` (deep verify) | `e2fsprogs` (+ Docker not needed) | `e2fsprogs` |
+
+### macOS
+
+```bash
+# Docker Desktop — needed for run.sh and for clone.sh restore with ext4 expansion.
+# macOS cannot resize ext4 natively, so a Linux helper container does it.
+brew install --cask docker
+# then launch Docker Desktop once so the daemon is running
+
+# e2fsprogs — needed for check.sh entware and ext4 integrity checks.
+# Provides e2fsck and debugfs. Homebrew installs it keg-only (not on PATH);
+# check.sh finds it automatically in the keg.
+brew install e2fsprogs
+
+# ddrescue — only needed to rescue a failing/dying drive (see "Recovering a dying drive").
+brew install ddrescue
+```
+
+> Docker Desktop file sharing must allow `/Users` (the default). `clone.sh`
+> places its temporary images under `~/.cache/keenetic-flash` so the helper
+> container can mount them.
+
+### Linux
+
+```bash
+# Debian / Ubuntu (and most router hosts)
+sudo apt install docker.io parted e2fsprogs util-linux kpartx gdisk gddrescue
+
+# Docker is optional on Linux: clone.sh expands ext4 natively when parted,
+# e2fsprogs, util-linux and kpartx are present. Docker is only used as a
+# fallback / for run.sh.
+```
 
 ## Supported Models
 

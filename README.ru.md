@@ -33,7 +33,47 @@ Docker-образ скачивается автоматически. Если р
 
 ## Требования
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (macOS / Linux)
+Что нужно — зависит от запускаемого скрипта:
+
+| Скрипт | macOS | Linux |
+|--------|-------|-------|
+| `run.sh` (запись флешки) | Docker Desktop | Docker |
+| `clone.sh backup` | встроено (`dd`, `diskutil`) | встроено (`dd`, `lsblk`) |
+| `clone.sh restore` (с авто-расширением) | Docker Desktop | `parted`, `e2fsprogs`, `util-linux`, `kpartx`, `gdisk` |
+| `clone.sh restore --no-expand` | встроено | встроено |
+| `check.sh` (quick / full / write) | встроено | встроено |
+| `check.sh entware` (глубокая проверка) | `e2fsprogs` (Docker не нужен) | `e2fsprogs` |
+
+### macOS
+
+```bash
+# Docker Desktop — нужен для run.sh и для clone.sh restore с расширением ext4.
+# macOS не умеет менять размер ext4 нативно, поэтому это делает Linux-контейнер.
+brew install --cask docker
+# затем один раз запустите Docker Desktop, чтобы поднялся демон
+
+# e2fsprogs — нужен для check.sh entware и проверки целостности ext4.
+# Даёт e2fsck и debugfs. Homebrew ставит keg-only (не в PATH);
+# check.sh находит их в кеге автоматически.
+brew install e2fsprogs
+
+# ddrescue — нужен только для спасения умирающей флешки (см. «Восстановление умирающей флешки»).
+brew install ddrescue
+```
+
+> В Docker Desktop file sharing должен разрешать `/Users` (по умолчанию так и есть).
+> `clone.sh` кладёт временные образы в `~/.cache/keenetic-flash`, чтобы контейнер
+> мог их примонтировать.
+
+### Linux
+
+```bash
+# Debian / Ubuntu (и большинство хостов-роутеров)
+sudo apt install docker.io parted e2fsprogs util-linux kpartx gdisk gddrescue
+
+# Docker на Linux опционален: clone.sh расширяет ext4 нативно, если есть parted,
+# e2fsprogs, util-linux и kpartx. Docker используется как fallback / для run.sh.
+```
 
 ## Поддерживаемые модели
 

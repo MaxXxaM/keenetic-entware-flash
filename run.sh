@@ -266,33 +266,33 @@ elif [ "$OS" = "Darwin" ]; then
     diskutil unmountDisk "$DISK" 2>/dev/null || true
 
     TOTAL_GB=$(awk "BEGIN {printf \"%.1f\", $DISK_SIZE / 1073741824}")
-    echo ">>> Writing image to $RAW_DISK (${TOTAL_GB} GB, skipping empty blocks)..."
+    echo ">>> Writing image to $RAW_DISK (${TOTAL_GB} GB, full write)..."
 
+    # NOTE: every block is written, including zeros. Skipping zero blocks
+    # corrupts ext4 on any USB that already held data: a fresh ext4 expects
+    # its inode tables / journal regions to be zeroed, but skipping leaves
+    # stale garbage there, so the router cannot mount the data partition.
     python3 -c "
 import os, sys
 BLOCK = 4 * 1024 * 1024
 src, dst = sys.argv[1], sys.argv[2]
 total = os.path.getsize(src)
-zero = b'\x00' * BLOCK
 written = 0
-offset = 0
 fd = os.open(dst, os.O_WRONLY)
 with open(src, 'rb') as f:
-    while offset < total:
+    while True:
         data = f.read(BLOCK)
         if not data:
             break
-        if data != zero[:len(data)]:
-            os.lseek(fd, offset, os.SEEK_SET)
-            os.write(fd, data)
-            written += len(data)
-        offset += len(data)
-        pct = offset * 100 // total
-        sys.stdout.write('\r    %d%% scanned — %d MB written' % (pct, written // 1048576))
+        os.write(fd, data)
+        written += len(data)
+        pct = written * 100 // total
+        sys.stdout.write('\r    %d%% — %d MB written' % (pct, written // 1048576))
         sys.stdout.flush()
+os.fsync(fd)
 os.close(fd)
-print('\n    Done: %d MB written out of %d MB total (%.0f%% was empty)' % (
-    written // 1048576, total // 1048576, (total - written) * 100.0 / total))
+print('\n    Done: %d MB written out of %d MB total' % (
+    written // 1048576, total // 1048576))
 " "$TMP_IMG" "$RAW_DISK"
 
     echo ">>> Ejecting $DISK..."

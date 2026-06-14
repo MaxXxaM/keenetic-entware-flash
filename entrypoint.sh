@@ -247,13 +247,18 @@ partition_disk() {
     mkswap -L SWAP "$part1"
 
     echo ">>> Formatting ext4 ($part2)..."
-    # uninit_bg marks empty block groups as uninitialized (BG_INODE_UNINIT,
-    # protected by the group-descriptor checksum). The kernel and e2fsck never
-    # read those inode tables, so they don't have to be zeroed on disk. This is
-    # what makes the fast "skip empty blocks" write-back in run.sh safe even on
-    # a USB that already held data. ^metadata_csum keeps the older Keenetic
-    # kernels happy; uninit_bg has been supported since kernel 2.6.27.
-    mkfs.ext4 -O ^metadata_csum,uninit_bg -L OPKG -F "$part2"
+    # Feature flags are tuned for Keenetic's 32-bit, kernel-3.4 ext4 driver:
+    #   ^metadata_csum  modern checksums the old kernel does not understand
+    #   ^64bit          INCOMPAT feature enabled by default in new mke2fs; a
+    #                   kernel without 64bit support REFUSES to mount the fs
+    #                   (only needed beyond 16 TB anyway), so the data partition
+    #                   silently never appears on the router.
+    #   uninit_bg       marks empty block groups uninitialized so their inode
+    #                   tables are never read; this is what makes the fast
+    #                   "skip empty blocks" write-back in run.sh safe on a USB
+    #                   that already held data.
+    # -b 4096 -m 0 matches Keenetic's documented mkfs command (max usable space).
+    mkfs.ext4 -O ^metadata_csum,^64bit,uninit_bg -b 4096 -m 0 -L OPKG -F "$part2"
 
     echo ">>> Partitioning complete."
     echo ""

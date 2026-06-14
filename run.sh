@@ -252,6 +252,56 @@ elif [ "$OS" = "Darwin" ]; then
     DISK_SIZE=$(diskutil info -plist "$DISK" | plutil -extract TotalSize raw -)
     echo "    Size: $((DISK_SIZE / 1048576)) MB"
 
+    # Step 1b: verify the card actually stores data across its claimed size.
+    # Counterfeit / dead flash reports a huge size but silently drops writes
+    # beyond its real (tiny) capacity, so swap (near the start) works while the
+    # ext4 data partition never persists. Catch it here instead of after a flash
+    # that looks successful but leaves the router with no data partition.
+    if [ "${SKIP_CAPACITY_CHECK:-0}" != "1" ]; then
+        echo ">>> Verifying real capacity (writes test sectors across the disk)..."
+        diskutil unmountDisk force "$DISK" >/dev/null 2>&1 || true
+        if ! python3 -c "
+import os, sys, struct, time
+rdev, total = sys.argv[1], int(sys.argv[2])
+SECT = 512
+# exponential points from 1 MiB up (pin-points a tiny fake's real boundary)
+# plus ~12 points spread linearly to the last sector
+exp = [(1 << 20) << i for i in range(40)]
+pts = exp + [total * i // 12 for i in range(1, 12)] + [total - SECT]
+pts = sorted(set(p - (p % SECT) for p in pts if 0 < p < total))
+def stamp(off):
+    tag = b'KEENCAP' + struct.pack('<Q', off) + b'\xa5'
+    return (tag * (SECT // len(tag) + 1))[:SECT]
+fd = os.open(rdev, os.O_WRONLY)
+for off in pts:
+    os.lseek(fd, off, os.SEEK_SET); os.write(fd, stamp(off))
+os.fsync(fd); os.close(fd)
+time.sleep(1)
+fd = os.open(rdev, os.O_RDONLY)
+bad = [off for off in pts if os.pread(fd, SECT, off) != stamp(off)]
+# scrub the test sectors we just wrote
+os.close(fd)
+fd = os.open(rdev, os.O_WRONLY)
+for off in pts:
+    if off not in bad:
+        os.lseek(fd, off, os.SEEK_SET); os.write(fd, b'\x00' * SECT)
+os.fsync(fd); os.close(fd)
+if bad:
+    first = min(bad)
+    sys.stderr.write(
+        '\n    FAKE/DEFECTIVE CARD: writes past %.2f GB are silently dropped.\n'
+        '    The card reports %.1f GB but cannot store that much, so the data\n'
+        '    partition will never appear on the router. Replace the card.\n'
+        '    (override with SKIP_CAPACITY_CHECK=1 if you really know better)\n'
+        % (first / 1e9, total / 1e9))
+    sys.exit(1)
+print('    OK: capacity verified across the full %.1f GB.' % (total / 1e9))
+" "$RAW_DISK" "$DISK_SIZE"; then
+            echo ">>> Aborting — bad USB device."
+            exit 1
+        fi
+    fi
+
     echo ">>> Creating empty disk image..."
     truncate -s "$DISK_SIZE" "$TMP_IMG"
     chmod 666 "$TMP_IMG"

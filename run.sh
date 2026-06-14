@@ -289,53 +289,91 @@ elif [ "$OS" = "Darwin" ]; then
     FULL_WRITE="${FULL_WRITE:-0}" python3 -c "
 import os, sys, time, errno, subprocess
 BLOCK = 4 * 1024 * 1024
+BAR_W = 30
 full = os.environ.get('FULL_WRITE') == '1'
 src, dst, diskdev = sys.argv[1], sys.argv[2], sys.argv[3]
 total = os.path.getsize(src)
 zero = b'\x00' * BLOCK
 
+def human(n):
+    n = float(n)
+    for u in ('B', 'KB', 'MB', 'GB', 'TB'):
+        if n < 1024 or u == 'TB':
+            return ('%d %s' % (n, u)) if u == 'B' else ('%.1f %s' % (n, u))
+        n /= 1024
+
+def fmt_t(s):
+    s = int(s)
+    if s < 60: return '%ds' % s
+    if s < 3600: return '%dm%02ds' % (s // 60, s % 60)
+    return '%dh%02dm' % (s // 3600, (s % 3600) // 60)
+
+start = time.monotonic()
+last = [0.0]
+
+def draw(offset, written, note='', final=False):
+    now = time.monotonic()
+    if not final and not note and now - last[0] < 0.12:
+        return
+    last[0] = now
+    pct = offset * 100 // total if total else 100
+    fill = pct * BAR_W // 100
+    bar = '█' * fill + '░' * (BAR_W - fill)
+    el = now - start
+    rate = offset / el if el > 0 else 0
+    eta = (total - offset) / rate if rate > 0 else 0
+    spd = written / el if el > 0 else 0
+    msg = '\r  [%s] %3d%%  %s/%s  %s/s  %s  ETA %s' % (
+        bar, pct, human(written), human(total), human(spd), fmt_t(el), fmt_t(eta))
+    if note:
+        msg += '  (%s)' % note
+    sys.stdout.write(msg + '   ')
+    sys.stdout.flush()
+    if final:
+        sys.stdout.write('\n')
+
 # macOS DiskArbitration may auto-mount the disk again the moment we write a
 # valid partition table, grabbing the device and causing 'Resource busy'
-# (EBUSY) mid-write. Force-unmount and retry the same block when that happens.
+# (EBUSY). Force-unmount and retry the same block, showing it on the bar.
 def force_unmount():
     subprocess.run(['diskutil', 'unmountDisk', 'force', diskdev],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def busy_retry(fn, what):
-    for attempt in range(60):
+def busy_retry(fn, offset, written):
+    for attempt in range(120):
         try:
             return fn()
         except OSError as e:
             if e.errno == errno.EBUSY:
+                draw(offset, written, note='device busy, freeing... %d' % (attempt + 1))
                 force_unmount()
                 time.sleep(0.5)
                 continue
             raise
-    sys.exit('\\nERROR: %s stayed busy (%s). Close Finder/Disk Utility, quit\\n'
-             'other disk software, replug the USB, then run again.' % (dst, what))
+    sys.stdout.write('\n')
+    sys.exit('ERROR: %s stayed busy. Close Finder/Disk Utility, quit other disk '
+             'software, replug the USB, then run again.' % dst)
 
 written = 0
 offset = 0
-fd = busy_retry(lambda: os.open(dst, os.O_WRONLY), 'open')
+fd = busy_retry(lambda: os.open(dst, os.O_WRONLY), 0, 0)
+draw(0, 0)
 with open(src, 'rb') as f:
     while offset < total:
         data = f.read(BLOCK)
         if not data:
             break
         if full or data != zero[:len(data)]:
-            def w(off=offset, d=data):
-                os.lseek(fd, off, os.SEEK_SET)
-                os.write(fd, d)
-            busy_retry(w, 'write at %d MB' % (offset // 1048576))
+            o, d = offset, data
+            busy_retry(lambda: (os.lseek(fd, o, os.SEEK_SET), os.write(fd, d)), o, written)
             written += len(data)
         offset += len(data)
-        pct = offset * 100 // total
-        sys.stdout.write('\r    %d%% scanned — %d MB written' % (pct, written // 1048576))
-        sys.stdout.flush()
+        draw(offset, written)
 os.fsync(fd)
 os.close(fd)
-print('\n    Done: %d MB written out of %d MB total (%.0f%% skipped as empty)' % (
-    written // 1048576, total // 1048576, (total - written) * 100.0 / total))
+draw(total, written, final=True)
+print('    Done: wrote %s of %s (%.0f%% was empty and skipped).' % (
+    human(written), human(total), (total - written) * 100.0 / total if total else 0))
 " "$TMP_IMG" "$RAW_DISK" "$DISK"
 
     echo ">>> Ejecting $DISK..."

@@ -268,7 +268,7 @@ elif [ "$OS" = "Darwin" ]; then
     # Step 3: write image back to USB
     echo ""
     echo ">>> Unmounting $DISK before writing..."
-    diskutil unmountDisk "$DISK" 2>/dev/null || true
+    diskutil unmountDisk force "$DISK" 2>/dev/null || true
 
     TOTAL_GB=$(awk "BEGIN {printf \"%.1f\", $DISK_SIZE / 1073741824}")
 
@@ -287,23 +287,46 @@ elif [ "$OS" = "Darwin" ]; then
     fi
 
     FULL_WRITE="${FULL_WRITE:-0}" python3 -c "
-import os, sys
+import os, sys, time, errno, subprocess
 BLOCK = 4 * 1024 * 1024
 full = os.environ.get('FULL_WRITE') == '1'
-src, dst = sys.argv[1], sys.argv[2]
+src, dst, diskdev = sys.argv[1], sys.argv[2], sys.argv[3]
 total = os.path.getsize(src)
 zero = b'\x00' * BLOCK
+
+# macOS DiskArbitration may auto-mount the disk again the moment we write a
+# valid partition table, grabbing the device and causing 'Resource busy'
+# (EBUSY) mid-write. Force-unmount and retry the same block when that happens.
+def force_unmount():
+    subprocess.run(['diskutil', 'unmountDisk', 'force', diskdev],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def busy_retry(fn, what):
+    for attempt in range(60):
+        try:
+            return fn()
+        except OSError as e:
+            if e.errno == errno.EBUSY:
+                force_unmount()
+                time.sleep(0.5)
+                continue
+            raise
+    sys.exit('\\nERROR: %s stayed busy (%s). Close Finder/Disk Utility, quit\\n'
+             'other disk software, replug the USB, then run again.' % (dst, what))
+
 written = 0
 offset = 0
-fd = os.open(dst, os.O_WRONLY)
+fd = busy_retry(lambda: os.open(dst, os.O_WRONLY), 'open')
 with open(src, 'rb') as f:
     while offset < total:
         data = f.read(BLOCK)
         if not data:
             break
         if full or data != zero[:len(data)]:
-            os.lseek(fd, offset, os.SEEK_SET)
-            os.write(fd, data)
+            def w(off=offset, d=data):
+                os.lseek(fd, off, os.SEEK_SET)
+                os.write(fd, d)
+            busy_retry(w, 'write at %d MB' % (offset // 1048576))
             written += len(data)
         offset += len(data)
         pct = offset * 100 // total
@@ -313,7 +336,7 @@ os.fsync(fd)
 os.close(fd)
 print('\n    Done: %d MB written out of %d MB total (%.0f%% skipped as empty)' % (
     written // 1048576, total // 1048576, (total - written) * 100.0 / total))
-" "$TMP_IMG" "$RAW_DISK"
+" "$TMP_IMG" "$RAW_DISK" "$DISK"
 
     echo ">>> Ejecting $DISK..."
     diskutil eject "$DISK" 2>/dev/null || true

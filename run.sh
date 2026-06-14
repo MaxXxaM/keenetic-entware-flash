@@ -189,13 +189,18 @@ fi
 # ============================================================================
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# A locally built dev image always wins. Otherwise we always try to pull the
+# latest remote image rather than reusing a cached one: the fast "skip empty
+# blocks" write-back below is only safe with an image whose entrypoint formats
+# ext4 with uninit_bg, so a stale cached image must not be silently reused.
 if docker image inspect "$LOCAL_IMAGE" >/dev/null 2>&1; then
     IMAGE="$LOCAL_IMAGE"
-elif docker image inspect "$REMOTE_IMAGE" >/dev/null 2>&1; then
-    IMAGE="$REMOTE_IMAGE"
 else
-    echo ">>> Pulling pre-built image..."
+    echo ">>> Pulling latest pre-built image..."
     if docker pull --platform linux/amd64 "$REMOTE_IMAGE" 2>/dev/null; then
+        IMAGE="$REMOTE_IMAGE"
+    elif docker image inspect "$REMOTE_IMAGE" >/dev/null 2>&1; then
+        echo ">>> Pull failed — using cached image (set FULL_WRITE=1 if unsure it has uninit_bg)..."
         IMAGE="$REMOTE_IMAGE"
     else
         echo ">>> Pull failed, building locally..."
@@ -266,33 +271,48 @@ elif [ "$OS" = "Darwin" ]; then
     diskutil unmountDisk "$DISK" 2>/dev/null || true
 
     TOTAL_GB=$(awk "BEGIN {printf \"%.1f\", $DISK_SIZE / 1073741824}")
-    echo ">>> Writing image to $RAW_DISK (${TOTAL_GB} GB, full write)..."
 
-    # NOTE: every block is written, including zeros. Skipping zero blocks
-    # corrupts ext4 on any USB that already held data: a fresh ext4 expects
-    # its inode tables / journal regions to be zeroed, but skipping leaves
-    # stale garbage there, so the router cannot mount the data partition.
-    python3 -c "
+    # By default we skip all-zero blocks, which writes only ~200 MB instead of
+    # the whole disk. This is safe ONLY because entrypoint.sh formats the ext4
+    # partition with the uninit_bg feature: empty block groups are marked
+    # uninitialized, so the kernel/e2fsck never read their inode tables and the
+    # stale data left in the skipped regions of a used USB is ignored.
+    #
+    # Set FULL_WRITE=1 to write every block (slow, ~64 GB) — a safe fallback
+    # for the rare router whose kernel does not handle uninit_bg.
+    if [ "${FULL_WRITE:-0}" = "1" ]; then
+        echo ">>> Writing image to $RAW_DISK (${TOTAL_GB} GB, full write)..."
+    else
+        echo ">>> Writing image to $RAW_DISK (${TOTAL_GB} GB, skipping empty blocks)..."
+    fi
+
+    FULL_WRITE="${FULL_WRITE:-0}" python3 -c "
 import os, sys
 BLOCK = 4 * 1024 * 1024
+full = os.environ.get('FULL_WRITE') == '1'
 src, dst = sys.argv[1], sys.argv[2]
 total = os.path.getsize(src)
+zero = b'\x00' * BLOCK
 written = 0
+offset = 0
 fd = os.open(dst, os.O_WRONLY)
 with open(src, 'rb') as f:
-    while True:
+    while offset < total:
         data = f.read(BLOCK)
         if not data:
             break
-        os.write(fd, data)
-        written += len(data)
-        pct = written * 100 // total
-        sys.stdout.write('\r    %d%% — %d MB written' % (pct, written // 1048576))
+        if full or data != zero[:len(data)]:
+            os.lseek(fd, offset, os.SEEK_SET)
+            os.write(fd, data)
+            written += len(data)
+        offset += len(data)
+        pct = offset * 100 // total
+        sys.stdout.write('\r    %d%% scanned — %d MB written' % (pct, written // 1048576))
         sys.stdout.flush()
 os.fsync(fd)
 os.close(fd)
-print('\n    Done: %d MB written out of %d MB total' % (
-    written // 1048576, total // 1048576))
+print('\n    Done: %d MB written out of %d MB total (%.0f%% skipped as empty)' % (
+    written // 1048576, total // 1048576, (total - written) * 100.0 / total))
 " "$TMP_IMG" "$RAW_DISK"
 
     echo ">>> Ejecting $DISK..."

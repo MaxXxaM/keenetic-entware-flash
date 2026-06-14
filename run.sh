@@ -310,21 +310,22 @@ def fmt_t(s):
 
 start = time.monotonic()
 last = [0.0]
+written = 0
+data_total = total
 
-def draw(offset, written, note='', final=False):
+def draw(note='', final=False):
     now = time.monotonic()
     if not final and not note and now - last[0] < 0.12:
         return
     last[0] = now
-    pct = offset * 100 // total if total else 100
+    pct = written * 100 // data_total if data_total else 100
     fill = pct * BAR_W // 100
     bar = '█' * fill + '░' * (BAR_W - fill)
     el = now - start
-    rate = offset / el if el > 0 else 0
-    eta = (total - offset) / rate if rate > 0 else 0
     spd = written / el if el > 0 else 0
-    msg = '\r  [%s] %3d%%  %s/%s  %s/s  %s  ETA %s' % (
-        bar, pct, human(written), human(total), human(spd), fmt_t(el), fmt_t(eta))
+    eta = (data_total - written) / spd if spd > 0 else 0
+    msg = '\r  [%s] %3d%%  %s / %s  %s/s  %s  ETA %s' % (
+        bar, pct, human(written), human(data_total), human(spd), fmt_t(el), fmt_t(eta))
     if note:
         msg += '  (%s)' % note
     sys.stdout.write(msg + '   ')
@@ -334,46 +335,78 @@ def draw(offset, written, note='', final=False):
 
 # macOS DiskArbitration may auto-mount the disk again the moment we write a
 # valid partition table, grabbing the device and causing 'Resource busy'
-# (EBUSY). Force-unmount and retry the same block, showing it on the bar.
+# (EBUSY). Force-unmount and retry, showing it on the bar instead of hanging.
 def force_unmount():
     subprocess.run(['diskutil', 'unmountDisk', 'force', diskdev],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def busy_retry(fn, offset, written):
+def retry_busy(fn, what):
     for attempt in range(120):
         try:
             return fn()
         except OSError as e:
             if e.errno == errno.EBUSY:
-                draw(offset, written, note='device busy, freeing... %d' % (attempt + 1))
+                draw(note='device busy, freeing... %d' % (attempt + 1))
                 force_unmount()
                 time.sleep(0.5)
                 continue
             raise
     sys.stdout.write('\n')
-    sys.exit('ERROR: %s stayed busy. Close Finder/Disk Utility, quit other disk '
-             'software, replug the USB, then run again.' % dst)
+    sys.exit('ERROR: %s stayed busy while %s. Close Finder/Disk Utility, quit '
+             'other disk software, replug the USB, then run again.' % (dst, what))
 
-written = 0
-offset = 0
-fd = busy_retry(lambda: os.open(dst, os.O_WRONLY), 0, 0)
-draw(0, 0)
-with open(src, 'rb') as f:
-    while offset < total:
-        data = f.read(BLOCK)
-        if not data:
+infd = os.open(src, os.O_RDONLY)
+
+# The temp image is sparse: only the partition table, swap header, ext4
+# metadata and Entware are actually allocated (a few MB) — the rest is holes.
+# Find those allocated extents up front with SEEK_DATA/SEEK_HOLE (instant, no
+# I/O) and write only them. Holes are guaranteed zero; the ext4 uninit_bg
+# feature makes the stale data they leave on a used USB harmless. This writes
+# megabytes, not the whole 64 GB, and never reads the holes.
+if full:
+    extents = [(0, total)]
+else:
+    extents = []
+    scan = 0
+    while scan < total:
+        try:
+            ds = os.lseek(infd, scan, os.SEEK_DATA)
+        except OSError as e:
+            if e.errno == errno.ENXIO:
+                break          # no more data — rest of the image is holes
+            raise
+        if ds >= total:
             break
-        if full or data != zero[:len(data)]:
-            o, d = offset, data
-            busy_retry(lambda: (os.lseek(fd, o, os.SEEK_SET), os.write(fd, d)), o, written)
-            written += len(data)
-        offset += len(data)
-        draw(offset, written)
-os.fsync(fd)
-os.close(fd)
-draw(total, written, final=True)
-print('    Done: wrote %s of %s (%.0f%% was empty and skipped).' % (
-    human(written), human(total), (total - written) * 100.0 / total if total else 0))
+        try:
+            de = min(os.lseek(infd, ds, os.SEEK_HOLE), total)
+        except OSError:
+            de = total
+        if de > ds:
+            extents.append((ds, de))
+        scan = de if de > scan else scan + BLOCK
+data_total = sum(e - s for s, e in extents) or 1
+
+outfd = retry_busy(lambda: os.open(dst, os.O_WRONLY), 'opening device')
+draw()
+for ds, de in extents:
+    pos = ds
+    while pos < de:
+        n = min(BLOCK, de - pos)
+        chunk = os.pread(infd, n, pos)
+        if not chunk:
+            break
+        p = pos
+        retry_busy(lambda: (os.lseek(outfd, p, os.SEEK_SET), os.write(outfd, chunk)),
+                   'writing at %d MB' % (p // 1048576))
+        written += len(chunk)
+        pos += len(chunk)
+        draw()
+os.fsync(outfd)
+os.close(outfd)
+os.close(infd)
+draw(final=True)
+print('    Done: wrote %s of real data; skipped %s of empty space (%s disk).' % (
+    human(data_total), human(total - data_total), human(total)))
 " "$TMP_IMG" "$RAW_DISK" "$DISK"
 
     echo ">>> Ejecting $DISK..."
